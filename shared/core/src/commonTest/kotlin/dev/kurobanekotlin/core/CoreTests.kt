@@ -248,6 +248,15 @@ class ChatReducerTests {
         assertFalse(ChatUiState(running = true).reduce(WsEvent.Aborted).running)
         assertTrue(WsEvent.Aborted.endsTurn())
     }
+    @Test fun rejectedClientFramesDoNotEndTheTurn() {
+        val running = ChatUiState(running = true, streaming = "partial")
+        val st = running.reduce(WsEvent.Error("Steering queue is full for the running turn", "STEERING_QUEUE_FULL"))
+        assertTrue(st.running); assertEquals("partial", st.streaming)
+        assertEquals("Steering queue is full for the running turn", st.error)
+        assertFalse(WsEvent.Error("x", "INVALID_APPROVAL_RESPONSE").endsTurn())
+        assertTrue(WsEvent.Error("x", "AGENT_ERROR").endsTurn())
+        assertTrue(WsEvent.Error("x", null).endsTurn())
+    }
     @Test fun approvalRequestIsHeldUntilAnswered() {
         val req = WsEvent.ApprovalRequest("r1", "shell", "ls", 30)
         assertEquals(req, ChatUiState().reduce(req).pendingApproval)

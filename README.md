@@ -17,8 +17,8 @@ open an issue.
   so if the alias you typed does not exist, the first enabled agent is used.
 - **Chat**: session list (`GET /api/sessions`), open a transcript, start a new chat, send messages over `/ws/chat`
   with streamed replies, tool-call status, an Approve/Deny prompt for tool approvals, an Abort button, and a
-  token/cost summary. Each turn opens a socket and closes it when the turn ends. Approvals and Abort are covered by
-  unit tests and follow the gateway source, but were not exercised on the emulator.
+  token/cost summary. Each turn opens a socket and closes it when the turn ends. The approval round-trip and a 45-second turn were run on the emulator; Abort is covered by
+  unit tests and the gateway source but was not exercised live.
 - **Settings**: shows the connected gateway, **Forget this gateway** (deletes the stored token), the installed version
   and **Check for updates**.
 - **In-app updates** (release builds only): see [Updates](#updates).
@@ -30,6 +30,8 @@ light theme; `shared/designsystem` holds an unused theme catalog), tool-argument
 
 1. Download `kurobane-android.apk` from the [latest release](https://github.com/BookahCoding/Kurobane-for-android/releases/latest)
    and install it (Android asks you to allow installing from your browser or file manager the first time).
+   *No release has been published yet: the first one needs the signing key described under [Releasing](#releasing).
+   Until then, build the debug APK yourself (see [Build from source](#build-from-source)).*
 2. Start your gateway and get a pairing code (shown at startup while unpaired, or `zeroclaw gateway get-paircode --new`).
 3. In the app enter the gateway address and the code, then **Pair and connect**.
 
@@ -41,8 +43,9 @@ The gateway listens on `127.0.0.1:42617` by default, so the phone cannot reach i
 
 - **Recommended: `tailscale serve`**: proxy the local port over HTTPS on your tailnet and use
   `https://<machine>.<tailnet>.ts.net` in the app. Normal TLS, no cleartext.
-- **Direct**: set `[gateway] host` to the machine's Tailscale address (and `allow_public_bind = true`, which ZeroClaw
-  requires for a non-loopback bind) and use `http://100.x.y.z:42617`.
+- **Direct**: set `[gateway] host` to the machine's Tailscale address (or start the gateway with `--host`) and use
+  `http://100.x.y.z:42617`. ZeroClaw logs a warning for any non-loopback bind unless `[gateway] allow_public_bind = true`
+  (the setting only silences that warning; keep pairing enabled, and note that `0.0.0.0` exposes every interface).
 
 ### Cleartext (`http://`) policy and the trade-off
 

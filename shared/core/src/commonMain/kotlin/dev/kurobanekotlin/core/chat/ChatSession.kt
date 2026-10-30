@@ -31,8 +31,15 @@ data class ChatUiState(
     val error: String? = null,
 )
 
+/**
+ * `error` codes the gateway sends for a rejected client frame while the turn keeps running (see ws.rs: steering
+ * and frame validation). Every other `error` is a turn failure.
+ */
+private val nonFatalErrorCodes = setOf("STEERING_QUEUE_FULL", "STEERING_CLOSED", "INVALID_JSON", "EMPTY_CONTENT", "INVALID_APPROVAL_RESPONSE")
+
 /** True for the frames that end a turn; the socket is closed after one of them. */
-fun WsEvent.endsTurn(): Boolean = this is WsEvent.Done || this is WsEvent.Aborted || this is WsEvent.Error
+fun WsEvent.endsTurn(): Boolean = this is WsEvent.Done || this is WsEvent.Aborted ||
+    (this is WsEvent.Error && code !in nonFatalErrorCodes)
 
 /** Folds one gateway frame into the UI state. Pure, so it is unit-tested without a socket. */
 fun ChatUiState.reduce(evt: WsEvent): ChatUiState = when (evt) {
@@ -55,7 +62,9 @@ fun ChatUiState.reduce(evt: WsEvent): ChatUiState = when (evt) {
         )
     }
     is WsEvent.Aborted -> copy(streaming = "", running = false, pendingApproval = null, status = "Aborted")
-    is WsEvent.Error -> copy(streaming = "", running = false, pendingApproval = null, error = evt.message, status = evt.message)
+    is WsEvent.Error ->
+        if (evt.endsTurn()) copy(streaming = "", running = false, pendingApproval = null, error = evt.message, status = evt.message)
+        else copy(error = evt.message)
     else -> this
 }
 

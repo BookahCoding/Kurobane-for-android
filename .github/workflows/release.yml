@@ -128,7 +128,8 @@ jobs:
             echo "::warning::release-signing-cert.sha256 is not committed yet; this dry run only prints the fingerprint ($cert)."
           fi
 
-          badging=$("$bt/aapt2" dump badging kurobane-android.apk | head -1)
+          "$bt/aapt2" dump badging kurobane-android.apk > badging.txt
+          badging=$(grep -m1 '^package:' badging.txt)
           echo "$badging"
           IFS=. read -r ma mi pa <<< "$RELEASE_VERSION"
           want=$((ma * 10000 + mi * 100 + pa))
