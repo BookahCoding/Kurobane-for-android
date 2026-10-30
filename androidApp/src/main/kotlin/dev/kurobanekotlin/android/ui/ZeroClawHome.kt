@@ -96,9 +96,11 @@ fun ZeroClawHome(http: HttpClient, conn: GatewayConnection, onForget: () -> Unit
 
     ModalNavigationDrawer(
         drawerState = drawer,
-        drawerContainerColor = KurobanePalette.surface,
         drawerContent = {
-            SessionsSidebar(
+            androidx.compose.material3.ModalDrawerSheet(
+                drawerContainerColor = KurobanePalette.surface,
+            ) {
+                SessionsSidebar(
                 http = http, conn = conn,
                 openSessionKey = openSession?.sessionKey,
                 onNewChat = {
@@ -118,7 +120,8 @@ fun ZeroClawHome(http: HttpClient, conn: GatewayConnection, onForget: () -> Unit
                     if (d == Destination.Chat) openSession = openSession // keep the chat; only other pages replace it
                     closeDrawer()
                 },
-            )
+                )
+            }
         },
     ) {
         Surface(Modifier.fillMaxSize(), color = KurobanePalette.bg) {
