@@ -1,6 +1,18 @@
 package dev.kurobanekotlin.core
 
 import dev.kurobanekotlin.core.chat.ChatStream
+import dev.kurobanekotlin.core.chat.ChatUiState
+import dev.kurobanekotlin.core.chat.WsEvent
+import dev.kurobanekotlin.core.chat.endsTurn
+import dev.kurobanekotlin.core.chat.reduce
+import dev.kurobanekotlin.core.config.AgentInfo
+import dev.kurobanekotlin.core.connection.PairResult
+import dev.kurobanekotlin.core.connection.parsePairResponse
+import dev.kurobanekotlin.core.update.UpdateAvailable
+import dev.kurobanekotlin.core.update.UpdateChecker
+import dev.kurobanekotlin.core.update.UpdateCheckFailed
+import dev.kurobanekotlin.core.update.UpdateUpToDate
+import kotlinx.serialization.json.jsonObject
 import dev.kurobanekotlin.core.config.AgentsParser
 import dev.kurobanekotlin.core.config.isMaskedSecret
 import dev.kurobanekotlin.core.gateway.GatewayUrl
@@ -30,6 +42,23 @@ class GatewayUrlTests {
     @Test fun addsHttpsWhenMissing() {
         assertEquals("https://zc.example.com", GatewayUrl.normalize("zc.example.com").getOrThrow())
     }
+    @Test fun bareTailscaleIpDefaultsToHttp() {
+        assertEquals("http://100.64.0.2:42617", GatewayUrl.normalize("100.64.0.2:42617").getOrThrow())
+        assertEquals("http://192.168.1.5:42617", GatewayUrl.normalize("192.168.1.5:42617").getOrThrow())
+    }
+    @Test fun cleartextOnlyForPrivateRanges() {
+        for (ok in listOf("100.64.0.1", "100.127.255.254", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.0.9", "127.0.0.1",
+            "localhost", "box.tail1234.ts.net", "[fd7a:115c:a1e0::1]", "[::1]"))
+            assertTrue(GatewayUrl.isCleartextAllowed(ok), "$ok should allow http")
+        for (bad in listOf("100.63.255.255", "100.128.0.1", "172.15.0.1", "172.32.0.1", "192.169.0.1", "8.8.8.8", "example.com",
+            "evil.ts.net.example.com", "[2001:db8::1]", "1.2.3", "10.0.0.256"))
+            assertFalse(GatewayUrl.isCleartextAllowed(bad), "$bad must need https")
+    }
+    @Test fun explicitHttpToPublicHostIsRejected() {
+        assertFailsWith<IllegalArgumentException> { GatewayUrl.normalize("http://example.com:42617").getOrThrow() }
+        assertEquals("https://example.com", GatewayUrl.normalize("https://example.com/").getOrThrow())
+        assertEquals("http://box.tail1.ts.net:42617", GatewayUrl.normalize("http://box.tail1.ts.net:42617").getOrThrow())
+    }
     @Test fun keepsHttpAndPort() {
         assertEquals("http://100.64.0.2:42617", GatewayUrl.normalize("http://100.64.0.2:42617/").getOrThrow())
     }
@@ -50,7 +79,7 @@ class SessionsParserTests {
         val obj = json.parseToJsonElement("""{"sessions":[
             {"session_id":"abc","session_key":"gw_abc","created_at":"2026-01-01T10:00:00Z","last_activity":"2026-01-02T11:30:00Z","message_count":7,"agent_alias":"default","name":"Morning chat"},
             {"session_id":"def","session_key":"gw_def","created_at":"2026-01-03T09:00:00Z","last_activity":"2026-01-03T09:05:00Z","message_count":2,"channel_id":"telegram.bot"}
-        ]}""").let { kotlinx.serialization.json.jsonObject(it) }
+        ]}""").jsonObject
         val sessions = SessionsParser.parse(obj)
         assertEquals(2, sessions.size)
         assertEquals("abc", sessions[0].sessionId)
@@ -61,7 +90,7 @@ class SessionsParserTests {
     }
 
     @Test fun emptyWhenNoSessionsKey() {
-        assertEquals(emptyList(), SessionsParser.parse(json.parseToJsonElement("{}").let { kotlinx.serialization.json.jsonObject(it) }))
+        assertEquals(emptyList(), SessionsParser.parse(json.parseToJsonElement("{}").jsonObject))
     }
 }
 
@@ -70,7 +99,7 @@ class AgentsParserTests {
         val config = Json.parseToJsonElement("""{"agents":{
             "default":{"enabled":true,"channels":["telegram.bot"],"model_provider":"zai.main"},
             "coder":{"enabled":false,"channels":[],"model_provider":""}
-        }}""").let { kotlinx.serialization.json.jsonObject(it) }
+        }}""").jsonObject
         val agents = AgentsParser.parse(config)
         assertEquals(2, agents.size)
         assertEquals("coder", agents[0].alias)
@@ -116,7 +145,7 @@ class UpdateVersionTests {
         assertFalse(ReleaseVersion.tryParseTag("1.2.3"))
         assertFalse(ReleaseVersion.tryParseTag("v1.2.3-rc1"))
         assertFalse(ReleaseVersion.tryParseTag("v01.2.3"))
-        assertNull(ReleaseVersion.tryParseTag(null))
+        assertFalse(ReleaseVersion.tryParseTag(null))
     }
     @Test fun numericCompareNotLexical() {
         assertTrue(ReleaseVersion.parseTag("v0.10.0") > ReleaseVersion.parseTag("v0.9.0"))
@@ -145,6 +174,20 @@ class UpdateCheckerTests {
         assertEquals("https://github.com/$repo/releases/download/v0.6.0/kurobane-android.apk", avail.release.apkUrl)
     }
 
+    @Test fun digestIsParsedAndDraftsRejected() = runTest {
+        val hex = "a".repeat(64)
+        val body = """{"tag_name":"v0.6.0","draft":false,"prerelease":false,
+            "assets":[{"name":"kurobane-android.apk","browser_download_url":"https://github.com/$repo/releases/download/v0.6.0/kurobane-android.apk","size":9,"digest":"sha256:$hex"}]}"""
+        assertEquals(hex, assertIs<UpdateAvailable>(UpdateChecker(client(body), repo, ReleaseVersion(0, 5, 0)).check()).release.sha256)
+        val draft = """{"tag_name":"v0.7.0","draft":true,"prerelease":false,"assets":[]}"""
+        assertIs<UpdateCheckFailed>(UpdateChecker(client(draft), repo, ReleaseVersion(0, 5, 0)).check())
+    }
+
+    @Test fun missingReleaseIsReportedAsNoRelease() = runTest {
+        val r = UpdateChecker(client("{}", HttpStatusCode.NotFound), repo, ReleaseVersion(0, 5, 0)).check()
+        assertEquals(dev.kurobanekotlin.core.update.UpdateFailure.NoRelease, assertIs<UpdateCheckFailed>(r).kind)
+    }
+
     @Test fun sameOrOlderIsUpToDate() = runTest {
         val body = """{"tag_name":"v0.5.0","draft":false,"prerelease":false,"assets":[]}"""
         assertIs<UpdateUpToDate>(UpdateChecker(client(body), repo, ReleaseVersion(0, 5, 0)).check())
@@ -164,4 +207,60 @@ class UpdateCheckerTests {
         assertIs<UpdateCheckFailed>(r)
         assertEquals(dev.kurobanekotlin.core.update.UpdateFailure.Offline, r.kind)
     }
+}
+
+class PairResponseTests {
+    private fun obj(s: String) = Json.parseToJsonElement(s).jsonObject
+
+    @Test fun successReturnsToken() {
+        val r = parsePairResponse(200, obj("""{"paired":true,"persisted":true,"token":"zc_abc","message":"x"}"""))
+        assertEquals("zc_abc", assertIs<PairResult.Ok>(r).token)
+    }
+    @Test fun wrongCodeAndRateLimitSurfaceGatewayMessage() {
+        assertEquals("Invalid pairing code", assertIs<PairResult.Error>(parsePairResponse(403, obj("""{"error":"Invalid pairing code"}"""))).message)
+        assertEquals("Too many auth attempts. Try again in 30s.",
+            assertIs<PairResult.Error>(parsePairResponse(429, obj("""{"error":"Too many auth attempts. Try again in 30s."}"""))).message)
+        assertIs<PairResult.Error>(parsePairResponse(500, obj("""{"paired":false,"error":"Device registry error"}""")))
+    }
+    @Test fun okStatusWithoutTokenIsAnError() {
+        assertIs<PairResult.Error>(parsePairResponse(200, obj("""{"paired":true}""")))
+        assertIs<PairResult.Error>(parsePairResponse(200, null))
+    }
+}
+
+class ChatReducerTests {
+    @Test fun turnFoldsChunksIntoOneAssistantMessage() {
+        var st = ChatUiState(running = true)
+        st = st.reduce(WsEvent.Chunk("Hel")).reduce(WsEvent.Chunk("lo"))
+        assertEquals("Hello", st.streaming)
+        st = st.reduce(WsEvent.Done("Hello", "glm", "p", 0.0123, 42))
+        assertEquals(listOf(dev.kurobanekotlin.core.chat.ChatMessage("assistant", "Hello")), st.messages)
+        assertFalse(st.running); assertEquals("", st.streaming)
+        assertEquals("Done · glm · 42 tokens · \$0.0123", st.status)
+    }
+    @Test fun doneWithoutChunksUsesFullResponse() {
+        val st = ChatUiState(running = true).reduce(WsEvent.Done("whole", null, null, null, null))
+        assertEquals("whole", st.messages.single().content)
+    }
+    @Test fun errorAndAbortEndTheTurn() {
+        val e = ChatUiState(running = true, streaming = "x").reduce(WsEvent.Error("boom", "C"))
+        assertFalse(e.running); assertEquals("boom", e.error); assertEquals("", e.streaming)
+        assertFalse(ChatUiState(running = true).reduce(WsEvent.Aborted).running)
+        assertTrue(WsEvent.Aborted.endsTurn())
+    }
+    @Test fun approvalRequestIsHeldUntilAnswered() {
+        val req = WsEvent.ApprovalRequest("r1", "shell", "ls", 30)
+        assertEquals(req, ChatUiState().reduce(req).pendingApproval)
+    }
+}
+
+class AliasResolutionTests {
+    private val agents = listOf(
+        AgentInfo("coder", false, "", emptyList()),
+        AgentInfo("main", true, "", emptyList()),
+    )
+    @Test fun keepsEnabledRequestedAlias() = assertEquals("main", AgentsParser.resolveAlias(agents, "main"))
+    @Test fun fallsBackToFirstEnabledWhenDefaultMissing() = assertEquals("main", AgentsParser.resolveAlias(agents, "default"))
+    @Test fun disabledRequestedFallsBack() = assertEquals("main", AgentsParser.resolveAlias(agents, "coder"))
+    @Test fun nullWhenNoAgents() = assertNull(AgentsParser.resolveAlias(emptyList(), "default"))
 }

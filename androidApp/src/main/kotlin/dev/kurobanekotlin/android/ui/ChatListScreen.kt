@@ -37,7 +37,7 @@ import kotlinx.serialization.json.jsonObject
 import java.util.UUID
 
 @Composable
-fun ChatListScreen(http: HttpClient, conn: GatewayConnection) {
+fun ChatListScreen(http: HttpClient, conn: GatewayConnection, onOpenSettings: () -> Unit) {
     val api = remember(conn) { ZeroClawApi(http, conn) }
     val scope = rememberCoroutineScope()
     var sessions by remember { mutableStateOf<List<GatewaySession>>(emptyList()) }
@@ -48,8 +48,12 @@ fun ChatListScreen(http: HttpClient, conn: GatewayConnection) {
         scope.launch {
             val r = api.sessions()
             val obj = r.body.getOrNull()
-            if (obj != null) sessions = SessionsParser.parse(obj)
-            else error = "HTTP ${r.httpStatus}: ${r.body.exceptionOrNull()?.message}"
+            if (r.ok && obj != null) { sessions = SessionsParser.parse(obj); error = null }
+            else error = when (r.httpStatus) {
+                0 -> "Could not reach the gateway: ${r.body.exceptionOrNull()?.message ?: "network error"}"
+                401, 403 -> "The gateway rejected this device's token. Open Settings, forget the gateway and pair again."
+                else -> "The gateway answered HTTP ${r.httpStatus}."
+            }
         }
     }
     LaunchedEffect(conn) { refresh() }
@@ -64,12 +68,13 @@ fun ChatListScreen(http: HttpClient, conn: GatewayConnection) {
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Kurobane — ${conn.name}", style = MaterialTheme.typography.titleLarge)
+        Text("Kurobane — ${conn.name}", style = MaterialTheme.typography.titleLarge)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
                 val id = "kb-" + UUID.randomUUID().toString().take(12)
                 selected = GatewaySession(id, "gw_$id", "", "", 0, conn.agentAlias, null)
             }) { Text("+ New chat") }
+            OutlinedButton(onClick = onOpenSettings) { Text("Settings") }
         }
         Text(conn.baseUrl + " · agent " + conn.agentAlias, style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -124,7 +129,8 @@ fun ChatScreen(http: HttpClient, conn: GatewayConnection, session: GatewaySessio
         }
 
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(state.messages) { m ->
+            items(state.messages.size) { i ->
+                val m = state.messages[i]
                 val isUser = m.role == "user"
                 Card(Modifier.fillMaxWidth()) {
                     Text(if (isUser) "You" else "ZeroClaw", Modifier.padding(12.dp, 12.dp, 12.dp, 0.dp),
@@ -145,7 +151,11 @@ fun ChatScreen(http: HttpClient, conn: GatewayConnection, session: GatewaySessio
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(draft, { draft = it }, modifier = Modifier.weight(1f), label = { Text("Message") })
             Button(
-                onClick = { scope.launch { chat.send(draft).also { draft = "" } } },
+                onClick = {
+                    val text = draft
+                    draft = ""
+                    scope.launch { chat.send(text) }
+                },
                 enabled = draft.isNotBlank() && !state.running,
             ) { Text("Send") }
         }

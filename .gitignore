@@ -13,3 +13,7 @@ keystore.jks
 !gradle/wrapper/gradle-wrapper.jar
 !gradlew
 !gradlew.bat
+*.jks
+*.keystore
+*.p12
+.idea/

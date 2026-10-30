@@ -1,11 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Plain HTTP is allowed only to private Tailscale/LAN ranges; everything else requires TLS. -->
+<!--
+  Android's network security config can only match host names (a <domain> entry such as 100.64.0.0/10 is
+  treated as a literal host name and matches nothing), so it cannot restrict cleartext to an IP range.
+  The OS therefore permits cleartext, and the app enforces the policy itself before any connection:
+  GatewayUrl.normalize() accepts http:// only for loopback, private (RFC 1918), Tailscale
+  (100.64.0.0/10, fd7a:115c:a1e0::/48) and *.ts.net hosts; everything else must be https://.
+  All other app traffic (GitHub update checks and downloads) uses hard-coded https:// URLs.
+-->
 <network-security-config>
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">ts.net</domain>
-    </domain-config>
-    <domain-config cleartextTrafficPermitted="true">
-        <domain>100.64.0.0/10</domain>
-    </domain-config>
-    <base-config cleartextTrafficPermitted="false" />
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
 </network-security-config>

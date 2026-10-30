@@ -3,13 +3,12 @@ import java.util.Properties
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
-    alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.kotlin.serialization)
 }
 
 // A release sets these from its tag (-PappVersion=0.5.0) and repo (-PreleasesRepo=owner/name); see
-// .github/workflows/release.yml. A local build is 0.5.0 and never looks for updates.
-val appVersion = (findProperty("appVersion") as String?)?.removePrefix("v") ?: "0.5.0"
+// .github/workflows/release.yml. A local build is 0.5.1 and never looks for updates.
+val appVersion = (findProperty("appVersion") as String?)?.removePrefix("v") ?: "0.5.1"
 val releasesRepo = (findProperty("releasesRepo") as String?).orEmpty()
 
 android {
@@ -58,20 +57,16 @@ android {
 dependencies {
     implementation(projects.shared.core)
     implementation(projects.shared.designsystem)
+    implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.compose.runtime)
-    implementation(libs.compose.foundation)
-    implementation(libs.compose.material3)
-    implementation(libs.compose.ui)
-    implementation(libs.compose.ui.tooling.preview)
-    implementation(libs.compose.material.icons.extended)
-    implementation(libs.compose.foundation)
-    implementation(libs.compose.material3)
-    implementation(libs.markdown.renderer)
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.ktor.client.core)
     implementation(libs.koin.android)
+    implementation(libs.koin.compose)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.security.crypto)
-    debugImplementation(libs.compose.ui.tooling.preview)
+    implementation(libs.kotlinx.serialization.json)
 }

@@ -34,7 +34,11 @@ data class ReleaseVersion(val major: Int, val minor: Int, val patch: Int) : Comp
     }
 }
 
-data class UpdateRelease(val version: ReleaseVersion, val tag: String, val apkUrl: String, val apkSize: Long, val pageUrl: String)
+/** [sha256] is GitHub's `digest` for the asset (lower-case hex) when it reports one; the installer verifies it. */
+data class UpdateRelease(
+    val version: ReleaseVersion, val tag: String, val apkUrl: String, val apkSize: Long, val pageUrl: String,
+    val sha256: String? = null,
+)
 
 sealed interface UpdateCheckResult
 data class UpdateUpToDate(val latest: ReleaseVersion) : UpdateCheckResult
@@ -73,13 +77,15 @@ class UpdateChecker(private val http: HttpClient, private val repo: String, priv
         val version = ReleaseVersion.parseTag(tag!!)
         if (version <= current) return UpdateUpToDate(version)
         val assets = (obj["assets"] as? JsonArray) ?: JsonArray(emptyList())
-        val apk = assets.firstOrNull {
-            it.jsonObject["name"]?.jsonPrimitive?.content == "kurobane-android.apk" &&
+        val apk = assets.filterIsInstance<kotlinx.serialization.json.JsonObject>().firstOrNull {
+            it["name"]?.jsonPrimitive?.content == "kurobane-android.apk" &&
                 it.jsonObject["browser_download_url"]?.jsonPrimitive?.content ==
                     "https://github.com/$repo/releases/download/$tag/kurobane-android.apk"
         } ?: return UpdateCheckFailed(UpdateFailure.Malformed, "The release has no kurobane-android.apk at the expected address.")
         val url = apk.jsonObject["browser_download_url"]!!.jsonPrimitive.content
         val size = apk.jsonObject["size"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
-        return UpdateAvailable(UpdateRelease(version, tag, url, size, "https://github.com/$repo/releases/tag/$tag"))
+        val sha = apk.jsonObject["digest"]?.jsonPrimitive?.content
+            ?.removePrefix("sha256:")?.lowercase()?.takeIf { Regex("^[0-9a-f]{64}$").matches(it) }
+        return UpdateAvailable(UpdateRelease(version, tag, url, size, "https://github.com/$repo/releases/tag/$tag", sha))
     }
 }
