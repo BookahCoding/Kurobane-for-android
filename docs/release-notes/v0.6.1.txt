@@ -1,0 +1,4 @@
+Fixes the "Package installer keeps stopping" crash when installing the APK on Android 14.
+
+- The adaptive launcher icon's layers were bare ColorDrawables (intrinsic size -1); Android's PackageInstaller rasterizes the app icon for its Install confirmation and crashes on a sizeless drawable. The layers are now sized 108dp vector drawables (dark background, feather-mark foreground), plus a monochrome layer for Material You themed icons.
+- This is the same crash reported when installing the v0.5.1 and v0.6.0 APKs by tapping them (browser/file manager) as well as through the in-app updater; the installer dialog now opens normally.
