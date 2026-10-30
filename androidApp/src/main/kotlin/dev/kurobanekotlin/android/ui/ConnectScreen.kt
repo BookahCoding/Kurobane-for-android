@@ -32,7 +32,7 @@ fun ConnectScreen(
 ) {
     var name by remember { mutableStateOf("My ZeroClaw") }
     var url by remember { mutableStateOf("") }
-    var alias by remember { mutableStateOf("default") }
+    var alias by remember { mutableStateOf("kogarashi") }
     var code by remember { mutableStateOf("") }
 
     Surface(Modifier.fillMaxSize(), color = KurobanePalette.bg) {
@@ -54,7 +54,9 @@ fun ConnectScreen(
         )
         OutlinedTextField(
             alias, { alias = it }, label = { Text("Agent alias") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-            supportingText = { Text("Must match an [agents.<alias>] entry; if not, the first enabled agent is used.") },
+            supportingText = {
+                Text("Must match an enabled agent. If that name is missing and kogarashi is enabled, kogarashi is used. No other agent is substituted.")
+            },
         )
         OutlinedTextField(code, { code = it }, label = { Text("Pairing code") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Button(onClick = { onSave(name, url, alias, code) }, enabled = url.isNotBlank() && code.isNotBlank() && !busy) {

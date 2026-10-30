@@ -1,0 +1,14 @@
+Kurobane for Android 0.7.0 — everyday chat against a ZeroClaw gateway.
+
+- Agent alias: an exact enabled match wins. A missing or disabled name selects kogarashi when that agent is enabled. No other agent is substituted. If a saved name was invalid, the app explains that in one line and stores kogarashi on this phone.
+- Hokusai families match the Windows client: Washi & Ink, Great Wave, Red Fuji, Pine & Mist, Chrysanthemums, Peonies, Kirifuri Falls, and Thunderstorm, including dark colors. Light, dark, or system is stored on the phone. Text uses the platform font.
+- Chat renders selectable Markdown, copies assistant replies, and expands thinking and tool arguments or results. Running, error, and cancelled turns are distinct. A dropped connection is not sent again.
+- Approvals offer Approve, Deny, and Always. Always still asks on the server for every always_ask tool, including every shell call. One tap sends once. A dropped socket or a stale request id sends nothing. The card stays in the open chat and under Needs you.
+- Session search, drafts kept per gateway and session, and project labels that stay on this phone.
+- Simple mode is chat, sessions, and Needs you. Advanced adds Dashboard, Agents (process model plus this agent's model and fallback), Tools, Skills, Jobs, Memory, Usage, Plugins, personality file names, and Devices. Empty job and plugin lists say so. HTTP 401, an unreachable gateway, and a provider error use plain sentences.
+- PNG, JPEG, GIF, and WebP attach through POST /api/upload. Other files are refused. A local preview is shown before send.
+- A notification can appear when an approval arrives while the app is in the background. It says this is not reliable delivery while the app is killed. There is no push service.
+- Usage shows tokens. When the gateway leaves them unpriced, the app says so and does not invent a price. Memory and skills stay read only. Scheduled jobs can be created, paused, resumed, or deleted after a confirmation, and recent runs can be listed. A shell job is not pre-approved. Personality files on the gateway allowlist can be replaced after you open them and confirm. Gateway config sets one property at a time and refuses a masked secret. The provider or model changes only if you edit that property yourself.
+- The drawer slides away. Settings → Check for updates reads the latest stable release of this repository and installs only an asset named kurobane-android.apk. A debug-signed APK cannot update an install that was signed with the release key. Local builds leave the updater off.
+
+Real-gateway and phone checks are separate from the unit tests and from this build.
