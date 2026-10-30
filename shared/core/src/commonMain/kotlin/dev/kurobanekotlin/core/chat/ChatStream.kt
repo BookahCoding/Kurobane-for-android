@@ -31,7 +31,14 @@ sealed interface WsEvent {
     data class ToolCall(val id: String, val name: String, val args: String) : WsEvent
     data class ToolResult(val id: String, val name: String, val output: String) : WsEvent
     data class ApprovalRequest(val requestId: String, val tool: String, val summary: String, val timeoutSecs: Int) : WsEvent
-    data class Done(val fullResponse: String, val model: String?, val provider: String?, val costUsd: Double?, val tokensUsed: Long?) : WsEvent
+    data class Done(
+        val fullResponse: String,
+        val model: String?,
+        val provider: String?,
+        val costUsd: Double?,
+        val tokensUsed: Long?,
+        val unpricedTokens: Long? = null,
+    ) : WsEvent
     data object Aborted : WsEvent
     data class Error(val message: String, val code: String?) : WsEvent
     data class Other(val raw: JsonObject) : WsEvent
@@ -97,7 +104,7 @@ class ChatStream(
             "approval_request" -> WsEvent.ApprovalRequest(s("request_id") ?: "", s("tool") ?: "",
                 s("arguments_summary") ?: "", n("timeout_secs")?.toIntOrNull() ?: 0)
             "done" -> WsEvent.Done(s("full_response") ?: "", s("model"), s("provider"),
-                n("cost_usd")?.toDoubleOrNull(), n("tokens_used")?.toLongOrNull())
+                n("cost_usd")?.toDoubleOrNull(), n("tokens_used")?.toLongOrNull(), n("unpriced_tokens")?.toLongOrNull())
             "aborted" -> WsEvent.Aborted
             "error" -> WsEvent.Error(s("message") ?: "Unknown gateway error", s("code"))
             else -> WsEvent.Other(frame)

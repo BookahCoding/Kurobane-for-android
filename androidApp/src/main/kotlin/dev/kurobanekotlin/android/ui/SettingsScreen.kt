@@ -26,6 +26,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import dev.kurobanekotlin.android.BuildConfig
 import dev.kurobanekotlin.android.update.ApkInstaller
+import dev.kurobanekotlin.designsystem.ThemeCatalog
 import dev.kurobanekotlin.core.connection.GatewayConnection
 import dev.kurobanekotlin.core.update.ReleaseVersion
 import dev.kurobanekotlin.core.update.UpdateAvailable
@@ -51,7 +52,17 @@ private sealed interface UpdateUi {
 }
 
 @Composable
-fun SettingsScreen(conn: GatewayConnection, onForget: () -> Unit, modifier: Modifier = Modifier) {
+fun SettingsScreen(
+    conn: GatewayConnection,
+    onForget: () -> Unit,
+    appearance: String,
+    themeId: String,
+    advanced: Boolean,
+    onAppearance: (String) -> Unit,
+    onTheme: (String) -> Unit,
+    onAdvanced: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     var confirmForget by remember { mutableStateOf(false) }
     Column(
         modifier.verticalScroll(rememberScrollState()).padding(16.dp),
@@ -75,6 +86,53 @@ fun SettingsScreen(conn: GatewayConnection, onForget: () -> Unit, modifier: Modi
                         Button(onClick = onForget) { Text("Forget and unpair") }
                         OutlinedButton(onClick = { confirmForget = false }) { Text("Cancel") }
                     }
+                }
+            }
+        }
+
+        Card(
+            Modifier.fillMaxWidth(),
+            colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = KurobanePalette.surface),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Appearance", style = MaterialTheme.typography.titleMedium, color = KurobanePalette.text)
+                listOf(ThemeCatalog.SYSTEM to "System", ThemeCatalog.LIGHT to "Light", ThemeCatalog.DARK to "Dark").forEach { (id, label) ->
+                    OutlinedButton(onClick = { onAppearance(id) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (appearance == id) "$label · on" else label)
+                    }
+                }
+                Text("Theme", style = MaterialTheme.typography.titleSmall, color = KurobanePalette.text)
+                ThemeCatalog.all.forEach { family ->
+                    OutlinedButton(onClick = { onTheme(family.id) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (family.id == themeId) "${family.displayName} · on" else family.displayName)
+                    }
+                }
+                Text(
+                    "Text uses this phone's font so Greek and large text stay readable.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = KurobanePalette.textMuted,
+                )
+            }
+        }
+
+        Card(
+            Modifier.fillMaxWidth(),
+            colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = KurobanePalette.surface),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Experience", style = MaterialTheme.typography.titleMedium, color = KurobanePalette.text)
+                Text(
+                    if (advanced) {
+                        "Advanced shows Dashboard, Agents, Tools, Skills, Jobs, Memory, Usage, Plugins, Personality, and Devices."
+                    } else {
+                        "Simple shows chat, sessions, and Needs you."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = KurobanePalette.textMuted,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { onAdvanced(false) }) { Text(if (!advanced) "Simple · on" else "Simple") }
+                    OutlinedButton(onClick = { onAdvanced(true) }) { Text(if (advanced) "Advanced · on" else "Advanced") }
                 }
             }
         }

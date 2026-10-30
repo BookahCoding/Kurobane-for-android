@@ -13,4 +13,6 @@ object SettingsKeys {
     const val ActiveServer = "active_server"
     const val Appearance = "appearance"     // system | light | dark
     const val ThemeId = "theme_id"
+    const val Experience = "experience"     // simple | advanced
+    const val PhoneProjects = "phone_projects.json"
 }

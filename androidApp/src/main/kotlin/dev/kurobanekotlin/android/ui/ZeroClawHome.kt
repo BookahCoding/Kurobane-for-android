@@ -1,5 +1,9 @@
 package dev.kurobanekotlin.android.ui
 
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,31 +22,40 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Insights
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Toll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,93 +64,208 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import dev.kurobanekotlin.core.config.AgentsParser
+import dev.kurobanekotlin.android.AppVisibility
+import dev.kurobanekotlin.android.ApprovalNotifier
+import dev.kurobanekotlin.core.catalog.ReadModels
+import dev.kurobanekotlin.core.chat.ChatSession
+import dev.kurobanekotlin.core.chat.ChatUiState
 import dev.kurobanekotlin.core.connection.GatewayConnection
 import dev.kurobanekotlin.core.connection.ZeroClawApi
-import dev.kurobanekotlin.core.gateway.GatewayStatus
-import dev.kurobanekotlin.core.gateway.StatusParser
 import dev.kurobanekotlin.core.sessions.GatewaySession
 import dev.kurobanekotlin.core.sessions.SessionsParser
 import dev.kurobanekotlin.core.sessions.formatLastActivity
-import dev.kurobanekotlin.core.tools.GatewayTool
-import dev.kurobanekotlin.core.tools.ToolsParser
-import dev.kurobanekotlin.designsystem.ThemeCatalog
-import dev.kurobanekotlin.designsystem.ThemeColors
+import dev.kurobanekotlin.core.storage.KeyValueStore
+import dev.kurobanekotlin.core.storage.SettingsKeys
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import org.koin.compose.koinInject
 import java.util.UUID
 
-/** The destinations the sidebar offers below the chat list. */
-enum class Destination(val title: String) { Chat("Chat"), Dashboard("Dashboard"), Agents("Agents"), Tools("Tools"), Settings("Settings") }
-
-/** The active palette; the app uses the catalog's first family until a theme picker exists. */
-val KurobanePalette: ThemeColors = ThemeCatalog.all.first().light
+/** Sidebar destinations. Advanced pages stay hidden in Simple. */
+enum class Destination(val title: String, val advanced: Boolean) {
+    Chat("Chat", false),
+    NeedsYou("Needs you", false),
+    Dashboard("Dashboard", true),
+    Agents("Agents", true),
+    Tools("Tools", true),
+    Skills("Skills", true),
+    Jobs("Jobs", true),
+    Memory("Memory", true),
+    Usage("Usage", true),
+    Plugins("Plugins", true),
+    Personality("Personality", true),
+    Config("Gateway config", true),
+    Devices("Devices", true),
+    Settings("Settings", false),
+}
 
 /**
- * The signed-in home, in Herald's shape: the open chat (or picked page) fills the screen and a sessions
- * sidebar — a drawer on phones — carries the chat list and the other destinations. Surfaces are colored
- * from the Kurobane theme catalog rather than stock Material colors.
+ * Signed-in home. The open [ChatSession] stays above the current page so Needs you and the chat
+ * share one approval, and leaving the chat does not drop the socket.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ZeroClawHome(http: HttpClient, conn: GatewayConnection, onForget: () -> Unit) {
+fun ZeroClawHome(
+    http: HttpClient,
+    conn: GatewayConnection,
+    advanced: Boolean,
+    appearance: String,
+    themeId: String,
+    aliasNote: String?,
+    onAliasNoteDismiss: () -> Unit,
+    onAppearance: (String) -> Unit,
+    onTheme: (String) -> Unit,
+    onAdvanced: (Boolean) -> Unit,
+    onForget: () -> Unit,
+) {
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-
+    val store: KeyValueStore = koinInject()
+    val context = LocalContext.current
+    val api = remember(conn) { ZeroClawApi(http, conn) }
     var destination by remember { mutableStateOf(Destination.Chat) }
     var openSession by remember { mutableStateOf<GatewaySession?>(null) }
+    var live by remember { mutableStateOf<Pair<GatewaySession, ChatSession>?>(null) }
+    val idle = remember { MutableStateFlow(ChatUiState()) }
+    val chatState by (live?.second?.state ?: idle).collectAsState()
+    var notified by remember { mutableStateOf<String?>(null) }
+    val resumed by AppVisibility.resumed.collectAsState()
+    val askNotify = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33) askNotify.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+    LaunchedEffect(advanced) {
+        if (!advanced && destination.advanced) destination = Destination.Chat
+    }
+    val pending = chatState.pendingApproval
+    LaunchedEffect(pending?.requestId, resumed) {
+        val req = pending ?: return@LaunchedEffect
+        if (!resumed && req.requestId != notified) {
+            ApprovalNotifier.notify(context, req.tool, req.requestId)
+            notified = req.requestId
+        }
+    }
+    DisposableEffect(live?.second) {
+        val session = live?.second
+        onDispose { scope.launch { session?.close() } }
+    }
 
     fun closeDrawer() {
         scope.launch { drawer.close() }
+    }
+    fun openDrawer() {
+        scope.launch { drawer.open() }
+    }
+    fun select(session: GatewaySession) {
+        val current = live
+        if (current?.first?.sessionId != session.sessionId) {
+            live = session to ChatSession(http, api, conn, session.sessionId)
+            scope.launch { live?.second?.loadHistory() }
+        }
+        openSession = session
+        destination = Destination.Chat
+        closeDrawer()
     }
 
     ModalNavigationDrawer(
         drawerState = drawer,
         drawerContent = {
-            androidx.compose.material3.ModalDrawerSheet(
-                drawerContainerColor = KurobanePalette.surface,
-            ) {
+            ModalDrawerSheet(drawerContainerColor = KurobanePalette.surfaceSidebar) {
                 SessionsSidebar(
-                http = http, conn = conn,
-                openSessionKey = openSession?.sessionKey,
-                onNewChat = {
-                    openSession = GatewaySession(
-                        "kb-" + UUID.randomUUID().toString().take(12), "", "", "", 0, conn.agentAlias, null,
-                    )
-                    destination = Destination.Chat
-                    closeDrawer()
-                },
-                onOpenSession = { s ->
-                    openSession = s
-                    destination = Destination.Chat
-                    closeDrawer()
-                },
-                onPickDestination = { d ->
-                    destination = d
-                    if (d == Destination.Chat) openSession = openSession // keep the chat; only other pages replace it
-                    closeDrawer()
-                },
+                    api = api,
+                    conn = conn,
+                    store = store,
+                    advanced = advanced,
+                    openSessionKey = openSession?.sessionKey,
+                    pendingTool = pending?.tool,
+                    pendingSummary = pending?.summary,
+                    pendingId = pending?.requestId,
+                    onAnswer = { decision, id -> scope.launch { live?.second?.answerApproval(decision, id) } },
+                    onNewChat = {
+                        select(
+                            GatewaySession(
+                                "kb-" + UUID.randomUUID().toString().take(12), "", "", "", 0, conn.agentAlias, null,
+                            ),
+                        )
+                    },
+                    onOpenSession = ::select,
+                    onPickDestination = { d ->
+                        destination = d
+                        closeDrawer()
+                    },
+                    onSessionDeleted = { id ->
+                        val cur = live?.first
+                        if (cur != null && (cur.sessionKey == id || cur.sessionId == id)) {
+                            openSession = null
+                            live = null
+                        }
+                    },
                 )
             }
         },
     ) {
         Surface(Modifier.fillMaxSize(), color = KurobanePalette.bg) {
-            when (destination) {
-                Destination.Chat -> {
-                    val s = openSession
-                    if (s == null) EmptyChatHome()
-                    else ChatScreen(http, conn, s, onBack = { openSession = null })
+            Column(Modifier.fillMaxSize()) {
+                aliasNote?.let { note ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(note, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = KurobanePalette.text)
+                        TextButton(onClick = onAliasNoteDismiss) { Text("Dismiss") }
+                    }
                 }
-                Destination.Dashboard -> DashboardPage(onOpenDrawer = { scope.launch { drawer.open() } }) {
-                    dashboardBody(http, conn)
+                Box(Modifier.weight(1f)) {
+                    when (destination) {
+                        Destination.Chat -> {
+                            val s = openSession
+                            val chat = live?.second
+                            if (s == null || chat == null) EmptyChatHome()
+                            else ChatScreen(api, conn, s, chat, store, scope, onBack = { openSession = null })
+                        }
+                        Destination.NeedsYou -> PageScaffold(Destination.NeedsYou.title, ::openDrawer) {
+                            NeedsYouPage(pending?.tool, pending?.summary, pending?.requestId) { decision, id ->
+                                scope.launch { live?.second?.answerApproval(decision, id) }
+                            }
+                        }
+                        Destination.Dashboard -> PageScaffold(Destination.Dashboard.title, ::openDrawer) { DashboardBody(http, conn) }
+                        Destination.Agents -> PageScaffold(Destination.Agents.title, ::openDrawer) { AgentsBody(http, conn) }
+                        Destination.Tools -> PageScaffold(Destination.Tools.title, ::openDrawer) { ToolsBody(http, conn) }
+                        Destination.Skills -> PageScaffold(Destination.Skills.title, ::openDrawer) { SkillsBody(http, conn) }
+                        Destination.Jobs -> PageScaffold(Destination.Jobs.title, ::openDrawer) { JobsBody(http, conn) }
+                        Destination.Memory -> PageScaffold(Destination.Memory.title, ::openDrawer) { MemoryBody(http, conn) }
+                        Destination.Usage -> PageScaffold(Destination.Usage.title, ::openDrawer) { UsageBody(http, conn) }
+                        Destination.Plugins -> PageScaffold(Destination.Plugins.title, ::openDrawer) { PluginsBody(http, conn) }
+                        Destination.Personality -> PageScaffold(Destination.Personality.title, ::openDrawer) { PersonalityBody(http, conn) }
+                        Destination.Config -> PageScaffold(Destination.Config.title, ::openDrawer) { ConfigBody(http, conn) }
+                        Destination.Devices -> PageScaffold(Destination.Devices.title, ::openDrawer) { DevicesBody(http, conn) }
+                        Destination.Settings -> PageScaffold(Destination.Settings.title, ::openDrawer) {
+                            SettingsScreen(
+                                conn, onForget, appearance, themeId, advanced,
+                                onAppearance, onTheme, onAdvanced,
+                            )
+                        }
+                    }
                 }
-                Destination.Agents -> AgentsPage(onOpenDrawer = { scope.launch { drawer.open() } }) { agentsBody(http, conn) }
-                Destination.Tools -> ToolsPage(onOpenDrawer = { scope.launch { drawer.open() } }) { toolsBody(http, conn) }
-                Destination.Settings -> SettingsPage(onOpenDrawer = { scope.launch { drawer.open() } }) { settingsBody(conn, onForget) }
             }
+        }
+    }
+}
+
+@Composable
+private fun NeedsYouPage(tool: String?, summary: String?, requestId: String?, onAnswer: (String, String) -> Unit) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        if (tool == null || requestId == null) {
+            Text("Nothing is waiting for you.", style = MaterialTheme.typography.bodyMedium, color = KurobanePalette.textMuted)
+        } else {
+            ApprovalCard(tool, summary.orEmpty(), requestId) { decision -> onAnswer(decision, requestId) }
         }
     }
 }
@@ -160,65 +288,112 @@ private fun EmptyChatHome() {
     }
 }
 
-/** The sidebar: app mark, gateway line, new chat, the session list, then the other destinations. */
 @Composable
 private fun SessionsSidebar(
-    http: HttpClient,
+    api: ZeroClawApi,
     conn: GatewayConnection,
+    store: KeyValueStore,
+    advanced: Boolean,
     openSessionKey: String?,
+    pendingTool: String?,
+    pendingSummary: String?,
+    pendingId: String?,
+    onAnswer: (String, String) -> Unit,
     onNewChat: () -> Unit,
     onOpenSession: (GatewaySession) -> Unit,
     onPickDestination: (Destination) -> Unit,
+    onSessionDeleted: (String) -> Unit,
 ) {
-    val api = remember(conn) { ZeroClawApi(http, conn) }
     val scope = rememberCoroutineScope()
     var sessions by remember { mutableStateOf<List<GatewaySession>?>(null) }
     var renaming by remember { mutableStateOf<GatewaySession?>(null) }
     var deleting by remember { mutableStateOf<GatewaySession?>(null) }
+    var labeling by remember { mutableStateOf<GatewaySession?>(null) }
+    var query by remember { mutableStateOf("") }
+    var labels by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var running by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     fun refresh() {
         scope.launch {
             val r = api.sessions()
             sessions = if (r.ok && r.body.getOrNull() != null) SessionsParser.parse(r.body.getOrNull()!!) else null
+            val live = api.runningSessions()
+            val body = live.body.getOrNull()
+            running = if (live.ok && body != null) ReadModels.runningIds(body) else emptySet()
         }
     }
-    LaunchedEffect(conn) { refresh() }
+    LaunchedEffect(conn) {
+        labels = store.get(SettingsKeys.PhoneProjects)
+            ?.let { runCatching { Json.decodeFromString<Map<String, String>>(it) }.getOrNull() }
+            .orEmpty()
+        refresh()
+    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         SidebarHeader(conn)
         Spacer(Modifier.height(12.dp))
         SidebarAction(Icons.Filled.Add, "New chat", KurobanePalette.accent, onNewChat)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            query, { query = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Search chats") },
+            singleLine = true,
+        )
+        Spacer(Modifier.height(12.dp))
+        Text("Needs you", style = MaterialTheme.typography.labelMedium, color = KurobanePalette.textMuted)
+        if (pendingTool != null && pendingId != null) {
+            ApprovalCard(pendingTool, pendingSummary.orEmpty(), pendingId) { decision -> onAnswer(decision, pendingId) }
+        } else {
+            Text("Nothing is waiting.", style = MaterialTheme.typography.bodySmall, color = KurobanePalette.textMuted)
+        }
+        SidebarLink(Icons.Filled.Notifications, Destination.NeedsYou.title) { onPickDestination(Destination.NeedsYou) }
         Spacer(Modifier.height(12.dp))
         Text("Chats", style = MaterialTheme.typography.labelMedium, color = KurobanePalette.textMuted)
         Spacer(Modifier.height(4.dp))
         val list = sessions
-        if (list == null) {
-            Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.Center) {
+        val shown = list?.let { rows ->
+            val q = query.trim()
+            if (q.isEmpty()) rows else rows.filter { s ->
+                val phone = labels[labelKey(s)].orEmpty()
+                s.displayName.contains(q, true) || s.sessionId.contains(q, true) || phone.contains(q, true)
+            }
+        }
+        when {
+            list == null -> Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(Modifier.size(20.dp))
             }
-        } else if (list.isEmpty()) {
-            Text(
-                "No chats yet",
-                style = MaterialTheme.typography.bodySmall,
-                color = KurobanePalette.textMuted,
-            )
-        } else {
-            list.forEach { s ->
+            list.isEmpty() -> Text("No chats yet", style = MaterialTheme.typography.bodySmall, color = KurobanePalette.textMuted)
+            shown.isNullOrEmpty() -> Text("No chats match.", style = MaterialTheme.typography.bodySmall, color = KurobanePalette.textMuted)
+            else -> shown.forEach { s ->
                 SessionRow(
                     s,
-                    open = s.sessionKey == openSessionKey,
+                    open = s.sessionKey.isNotBlank() && s.sessionKey == openSessionKey,
+                    phoneLabel = labels[labelKey(s)],
+                    running = s.sessionId in running || s.sessionKey in running,
                     onOpen = { onOpenSession(s) },
                     onRename = { renaming = s },
                     onDelete = { deleting = s },
+                    onLabel = { labeling = s },
                 )
             }
         }
         Spacer(Modifier.height(16.dp))
-        Text("Gateway", style = MaterialTheme.typography.labelMedium, color = KurobanePalette.textMuted)
+        Text(if (advanced) "Advanced" else "App", style = MaterialTheme.typography.labelMedium, color = KurobanePalette.textMuted)
         Spacer(Modifier.height(4.dp))
-        SidebarLink(Icons.Filled.Insights, Destination.Dashboard.title) { onPickDestination(Destination.Dashboard) }
-        SidebarLink(Icons.Filled.Menu, Destination.Agents.title) { onPickDestination(Destination.Agents) }
-        SidebarLink(Icons.Filled.SmartToy, Destination.Tools.title) { onPickDestination(Destination.Tools) }
+        if (advanced) {
+            SidebarLink(Icons.Filled.Dashboard, Destination.Dashboard.title) { onPickDestination(Destination.Dashboard) }
+            SidebarLink(Icons.Filled.SmartToy, Destination.Agents.title) { onPickDestination(Destination.Agents) }
+            SidebarLink(Icons.Filled.Build, Destination.Tools.title) { onPickDestination(Destination.Tools) }
+            SidebarLink(Icons.Filled.Menu, Destination.Skills.title) { onPickDestination(Destination.Skills) }
+            SidebarLink(Icons.Filled.Schedule, Destination.Jobs.title) { onPickDestination(Destination.Jobs) }
+            SidebarLink(Icons.Filled.Storage, Destination.Memory.title) { onPickDestination(Destination.Memory) }
+            SidebarLink(Icons.Filled.Toll, Destination.Usage.title) { onPickDestination(Destination.Usage) }
+            SidebarLink(Icons.Filled.Extension, Destination.Plugins.title) { onPickDestination(Destination.Plugins) }
+            SidebarLink(Icons.Filled.Person, Destination.Personality.title) { onPickDestination(Destination.Personality) }
+            SidebarLink(Icons.Filled.Tune, Destination.Config.title) { onPickDestination(Destination.Config) }
+            SidebarLink(Icons.Filled.Devices, Destination.Devices.title) { onPickDestination(Destination.Devices) }
+        }
         SidebarLink(Icons.Filled.Settings, Destination.Settings.title) { onPickDestination(Destination.Settings) }
     }
 
@@ -230,11 +405,29 @@ private fun SessionsSidebar(
     }
     deleting?.let { s ->
         DeleteDialog(name = s.displayName, onDismiss = { deleting = null }, onConfirm = {
+            val id = s.sessionKey.ifBlank { s.sessionId }
             scope.launch { api.deleteSession(s.sessionKey); refresh() }
+            onSessionDeleted(id)
             deleting = null
         })
     }
+    labeling?.let { s ->
+        LabelDialog(
+            initial = labels[labelKey(s)].orEmpty(),
+            onDismiss = { labeling = null },
+            onConfirm = { value ->
+                val next = labels.toMutableMap()
+                val key = labelKey(s)
+                if (value.isBlank()) next.remove(key) else next[key] = value.trim()
+                labels = next
+                scope.launch { store.set(SettingsKeys.PhoneProjects, Json.encodeToString(next)) }
+                labeling = null
+            },
+        )
+    }
 }
+
+private fun labelKey(s: GatewaySession) = s.sessionKey.ifBlank { s.sessionId }
 
 @Composable
 private fun SidebarHeader(conn: GatewayConnection) {
@@ -251,7 +444,7 @@ private fun SidebarHeader(conn: GatewayConnection) {
                 conn.name + " · " + conn.agentAlias,
                 style = MaterialTheme.typography.bodySmall,
                 color = KurobanePalette.textMuted,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -273,9 +466,12 @@ private fun SidebarAction(icon: ImageVector, label: String, tint: androidx.compo
 private fun SessionRow(
     s: GatewaySession,
     open: Boolean,
+    phoneLabel: String?,
+    running: Boolean,
     onOpen: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
+    onLabel: () -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth()
@@ -289,13 +485,20 @@ private fun SessionRow(
                 s.displayName,
                 style = MaterialTheme.typography.bodyMedium,
                 color = KurobanePalette.text,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
+            if (!phoneLabel.isNullOrBlank()) {
+                Text(phoneLabel, style = MaterialTheme.typography.bodySmall, color = KurobanePalette.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text("On this phone", style = MaterialTheme.typography.labelSmall, color = KurobanePalette.textMuted)
+            }
             Text(
-                formatLastActivity(s.lastActivity),
+                (if (running) "Running · " else "") + formatLastActivity(s.lastActivity),
                 style = MaterialTheme.typography.bodySmall,
                 color = KurobanePalette.textMuted,
             )
+        }
+        IconButton(onClick = onLabel, modifier = Modifier.size(28.dp)) {
+            Icon(Icons.Filled.Label, contentDescription = "Label on this phone", tint = KurobanePalette.textMuted, modifier = Modifier.size(14.dp))
         }
         IconButton(onClick = onRename, modifier = Modifier.size(28.dp)) {
             Icon(Icons.Filled.Edit, contentDescription = "Rename", tint = KurobanePalette.textMuted, modifier = Modifier.size(14.dp))
@@ -341,166 +544,23 @@ private fun DeleteDialog(name: String, onDismiss: () -> Unit, onConfirm: () -> U
     )
 }
 
-/** A themed page scaffold: a top bar with the sidebar button, content below. */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PageScaffold(title: String, onOpenDrawer: () -> Unit, content: @Composable () -> Unit) {
-    androidx.compose.material3.Scaffold(
-        containerColor = KurobanePalette.bg,
-        topBar = {
-            TopAppBar(
-                title = { Text(title, color = KurobanePalette.text) },
-                navigationIcon = {
-                    IconButton(onClick = onOpenDrawer) {
-                        Icon(Icons.Filled.Menu, contentDescription = "Open sidebar", tint = KurobanePalette.text)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = KurobanePalette.bg),
-            )
-        },
-    ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) { content() }
-    }
-}
-
-@Composable
-private fun DashboardPage(onOpenDrawer: () -> Unit, content: @Composable () -> Unit) =
-    PageScaffold(Destination.Dashboard.title, onOpenDrawer, content)
-
-@Composable
-private fun AgentsPage(onOpenDrawer: () -> Unit, content: @Composable () -> Unit) =
-    PageScaffold(Destination.Agents.title, onOpenDrawer, content)
-
-@Composable
-private fun ToolsPage(onOpenDrawer: () -> Unit, content: @Composable () -> Unit) =
-    PageScaffold(Destination.Tools.title, onOpenDrawer, content)
-
-@Composable
-private fun SettingsPage(onOpenDrawer: () -> Unit, content: @Composable () -> Unit) =
-    PageScaffold(Destination.Settings.title, onOpenDrawer, content)
-
-@Composable
-private fun dashboardBody(http: HttpClient, conn: GatewayConnection) {
-    val api = remember(conn) { ZeroClawApi(http, conn) }
-    var status by remember { mutableStateOf<GatewayStatus?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(conn) {
-        val r = api.status()
-        val obj = r.body.getOrNull()
-        if (r.ok && obj != null) status = StatusParser.parse(obj)
-        else error = "Could not load the gateway status (HTTP ${r.httpStatus})."
-    }
-
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        error?.let { Text(it, color = KurobanePalette.danger) }
-        val s = status
-        if (s == null && error == null) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
-        s?.let { st ->
-            InfoCard("Gateway") {
-                InfoRow("Version", st.version)
-                InfoRow("Uptime", StatusParser.formatUptime(st.uptimeSeconds))
-                InfoRow("Paired", if (st.paired) "yes" else "no")
-                InfoRow("Memory backend", st.memoryBackend)
-                InfoRow("Port", st.gatewayPort.toString())
-            }
-            InfoCard("Model") {
-                InfoRow("Provider", st.modelProvider ?: "—")
-                InfoRow("Model", st.model.ifBlank { "—" })
-                st.temperature?.let { InfoRow("Temperature", it.toString()) }
-            }
-            if (st.channels.isNotEmpty()) InfoCard("Channels") {
-                st.channels.forEach { Text(it, style = MaterialTheme.typography.bodyMedium, color = KurobanePalette.text) }
-            }
-        }
-    }
-}
-
-@Composable
-private fun agentsBody(http: HttpClient, conn: GatewayConnection) {
-    val api = remember(conn) { ZeroClawApi(http, conn) }
-    var agents by remember { mutableStateOf<List<dev.kurobanekotlin.core.config.AgentInfo>>(emptyList()) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(conn) {
-        val r = api.config()
-        val obj = r.body.getOrNull()
-        if (r.ok && obj != null) agents = AgentsParser.parse(obj)
-        else error = "Could not load the agent list (HTTP ${r.httpStatus})."
-    }
-
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        error?.let { Text(it, color = KurobanePalette.danger) }
-        if (agents.isEmpty() && error == null) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
-        agents.forEach { a ->
-            InfoCard(a.alias) {
+private fun LabelDialog(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+    var name by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Label on this phone") },
+        text = {
+            Column {
                 Text(
-                    (if (a.enabled) "enabled" else "disabled") +
-                        (if (a.modelProvider.isNotBlank()) " · ${a.modelProvider}" else "") +
-                        (if (a.channels.isNotEmpty()) " · ${a.channels.joinToString(", ")}" else ""),
+                    "On this phone. The gateway does not see this label.",
                     style = MaterialTheme.typography.bodySmall,
                     color = KurobanePalette.textMuted,
                 )
+                OutlinedTextField(name, { name = it }, label = { Text("Project") }, singleLine = true)
             }
-        }
-    }
-}
-
-@Composable
-private fun toolsBody(http: HttpClient, conn: GatewayConnection) {
-    val api = remember(conn) { ZeroClawApi(http, conn) }
-    var tools by remember { mutableStateOf<List<GatewayTool>>(emptyList()) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(conn) {
-        val r = api.tools(conn.agentAlias)
-        val obj = r.body.getOrNull()
-        if (r.ok && obj != null) tools = ToolsParser.parse(obj)
-        else error = "Could not load the tool list (HTTP ${r.httpStatus})."
-    }
-
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        error?.let { Text(it, color = KurobanePalette.danger) }
-        if (tools.isEmpty() && error == null) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
-        tools.forEach { t ->
-            InfoCard(t.name) {
-                Text(t.description, style = MaterialTheme.typography.bodyMedium, color = KurobanePalette.text)
-            }
-        }
-    }
-}
-
-@Composable
-private fun settingsBody(conn: GatewayConnection, onForget: () -> Unit) {
-    SettingsScreen(conn, onForget)
-}
-
-@Composable
-private fun InfoCard(title: String, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
-    Card(
-        Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = KurobanePalette.surface),
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(title, style = MaterialTheme.typography.titleSmall, color = KurobanePalette.text)
-            content()
-        }
-    }
-}
-
-@Composable
-private fun InfoRow(label: String, value: String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = KurobanePalette.textMuted)
-        Text(value, style = MaterialTheme.typography.bodyMedium, color = KurobanePalette.text)
-    }
+        },
+        confirmButton = { TextButton(onClick = { onConfirm(name) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }

@@ -13,27 +13,47 @@ open an issue.
 
 - **Pairing**: enter the gateway address, agent alias and a pairing code; the app calls `POST /api/pair` and stores
   the bearer token in Keystore-backed `EncryptedSharedPreferences`. Wrong code, rate limit and unreachable-gateway
-  messages are shown. After pairing, the alias is checked against `GET /api/config`: the gateway has no default agent,
-  so if the alias you typed does not exist, the first enabled agent is used.
-- **Chat**: session list (`GET /api/sessions`) with friendly names and relative timestamps, rename and delete
-  (`PUT` / `DELETE /api/sessions/{id}`), open a transcript, start a new chat, send messages over `/ws/chat`
-  with streamed replies, tool-call status, an Approve/Always/Deny prompt for tool approvals, an Abort button, and a
-  token/cost summary. Each turn opens a socket and closes it when the turn ends. The approval round-trip and a 45-second turn were run on the emulator; Abort is covered by
-  unit tests and the gateway source but was not exercised live.
-- **Dashboard**: gateway health from `GET /api/status` (version, uptime, pairing state, memory backend, resolved
-  model/provider, channels).
-- **Agents**: the configured agent list from `GET /api/config` (alias, enabled, provider, channels).
-- **Tools**: the tool registry from `GET /api/tools?agent=…` (name + description), scoped to the connected agent.
-- **Settings**: shows the connected gateway, **Forget this gateway** (deletes the stored token), the installed version
+  messages are shown. After pairing, the alias is checked against `GET /api/config`. An exact enabled match wins.
+  If the name is missing or disabled and `kogarashi` is enabled, that agent is selected and stored on this phone,
+  with a one-line explanation. No other agent is substituted. A failed config fetch keeps the saved name.
+- **Chat**: session list (`GET /api/sessions`) with search, friendly names, relative timestamps, rename and delete
+  (`PUT` / `DELETE /api/sessions/{id}`), device-only project labels captioned "On this phone", and a draft kept per
+  gateway and session. Open a transcript, start a new chat, and send messages over `/ws/chat` with streamed replies.
+  Assistant replies render selectable Markdown (headings, emphasis, lists, inline code, fenced code, links) and can
+  be copied. Thinking and tool arguments/results expand in the bubble. Running, error, and cancelled turns look
+  different. PNG, JPEG, GIF, and WebP images upload with `POST /api/upload?agent=` and the returned marker is inserted
+  into the message; other files are refused, and a local preview is shown before send. Each turn opens a socket and
+  closes it when the turn ends. A dropped connection is not sent again.
+- **Approvals**: Approve, Deny, and Always. Under Always, the app says the server still asks for every `always_ask`
+  tool, including every shell call. One tap sends once. A dropped socket or a stale request id sends nothing.
+  The same card stays in the open chat and in **Needs you**. If an approval arrives while the activity is not resumed,
+  a notification is posted (Android 13+ asks for notification permission). The text says this is not reliable delivery
+  while the app is killed. There is no foreground service and no push.
+- **Simple and Advanced**: Simple is chat, sessions, and Needs you. Advanced also opens Dashboard, Agents, Tools,
+  Skills, Jobs, Memory, Usage, Plugins, Personality (file names only), and Devices (name and type). Jobs, memory, and
+  skills are read only. Empty cron and plugin lists say so. HTTP 401, an unreachable gateway, and a provider error
+  use plain sentences.
+- **Dashboard**: `GET /api/status` and `GET /api/health` (version, uptime, pairing, memory backend, process model).
+- **Agents**: the configured list from `GET /api/config`, plus this agent's model and fallback from the config and
+  `GET /api/config/prop`, shown next to the process model from `GET /api/status`. The two labels can differ.
+- **Tools**: `GET /api/tools?agent=…` (name and description) for the connected agent.
+- **Usage**: `GET /api/cost` shows tokens. When `usd` is 0 and tokens are unpriced, the app says the gateway did not
+  price them and does not invent a cost.
+- **Appearance**: eight Hokusai families from the Windows catalog (Washi & Ink, Great Wave, Red Fuji, Pine & Mist,
+  Chrysanthemums, Peonies, Kirifuri Falls, Thunderstorm), light and dark, plus a light/dark/system choice stored on
+  the phone. Text uses the platform font so Greek and large text stay readable.
+- **Settings**: the connected gateway, **Forget this gateway**, appearance, Simple/Advanced, the installed version,
   and **Check for updates**.
 
 The signed-in home follows Herald's shape: the open chat fills the screen and a sessions sidebar — a drawer on
-phones — carries the chat list plus Dashboard, Agents, Tools and Settings. Surfaces are colored from the Hokusai
-theme catalog in `shared/designsystem` (Washi & Ink by default), the same families as the Windows client.
+phones — carries the chat list and the other destinations.
 - **In-app updates** (release builds only): see [Updates](#updates).
 
-Not implemented yet: Markdown rendering, a dark/themed UI (the app uses the default Material 3
-light theme; `shared/designsystem` holds an unused theme catalog), tool-argument/result details, notifications.
+Not implemented: voice input (no voice API is used), push or any delivery once the process is dead, creating jobs,
+writing skills, and deleting memory. A debug-signed APK will not update over a release-signed install.
+
+Unit tests cover parsing, the alias rule, Markdown blocks, image types, approval gating, and unpriced usage.
+**Real-gateway and phone checks are separate** from those tests and from the emulator stand-in described above.
 
 ## Install
 
@@ -150,9 +170,12 @@ Checked against the ZeroClaw gateway source:
   `approval_request`, `done`, `aborted`, `error`. Answer approvals with
   `{"type":"approval_response","request_id":…,"decision":"approve|deny|always"}`. The gateway keeps the socket open after
   `done`, so the client closes it.
-- REST used by the app: `GET /api/sessions`, `GET /api/sessions/{id}/messages`, `POST /api/sessions/{id}/abort`,
-  `PUT /api/sessions/{id}` (rename), `DELETE /api/sessions/{id}` (delete), `GET /api/config` (agent list),
-  `GET /api/status` (dashboard), `GET /api/tools?agent=…` (tool registry).
+- REST used by the app: `GET /api/sessions`, `GET /api/sessions/running`, `GET /api/sessions/{id}/messages`,
+  `POST /api/sessions/{id}/abort`, `PUT /api/sessions/{id}` (rename), `DELETE /api/sessions/{id}` (delete),
+  `GET /api/config`, `GET /api/config/prop?path=`, `GET /api/status`, `GET /api/health`, `GET /api/tools?agent=…`,
+  `GET /api/cron`, `GET /api/memory`, `GET /api/cost`, `GET /api/plugins`, `GET /api/skills/bundles`,
+  `GET /api/agents/{alias}/skills`, `GET /api/personality?agent=`, `GET /api/devices`.
+  `POST /api/upload?agent=` sends raw PNG, JPEG, GIF, or WebP bytes and returns `{path, marker}`.
 - Session ids: `GET /api/sessions` returns both a display `session_id` (`gw_` stripped) and the full `session_key`;
   rename/delete use `session_key`, the WebSocket uses the display id.
 

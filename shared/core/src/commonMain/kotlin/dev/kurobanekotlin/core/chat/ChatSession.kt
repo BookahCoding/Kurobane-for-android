@@ -1,6 +1,7 @@
 package dev.kurobanekotlin.core.chat
 
 import dev.kurobanekotlin.core.connection.GatewayConnection
+import dev.kurobanekotlin.core.connection.GatewayErrors
 import dev.kurobanekotlin.core.connection.ZeroClawApi
 import io.ktor.client.HttpClient
 import io.ktor.websocket.CloseReason
@@ -8,6 +9,7 @@ import io.ktor.websocket.WebSocketSession
 import io.ktor.websocket.close
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,17 +21,47 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
+/** How one assistant bubble ended. User bubbles stay [BubbleState.Complete]. */
+enum class BubbleState { Complete, Running, Error, Cancelled }
+
+data class ToolTrace(val id: String, val name: String, val args: String, val result: String? = null)
+
 /** UI-facing state of one chat: messages plus the live tail while a turn runs. */
-data class ChatMessage(val role: String, val content: String)
+data class ChatMessage(
+    val role: String,
+    val content: String,
+    val thinking: String = "",
+    val tools: List<ToolTrace> = emptyList(),
+    val bubble: BubbleState = BubbleState.Complete,
+)
+
+/** Which plain-language problem frame the chat should show, if any. */
+enum class ProblemFrame { Unreachable, Unauthorized, Provider }
 
 data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),
     val streaming: String = "",
+    val thinking: String = "",
+    val tools: List<ToolTrace> = emptyList(),
     val running: Boolean = false,
     val status: String = "",
     val pendingApproval: WsEvent.ApprovalRequest? = null,
     val error: String? = null,
+    val frame: ProblemFrame? = null,
 )
+
+/** The server still asks for every always_ask tool. Shown under the Always button. */
+const val ALWAYS_ASK_NOTE =
+    "Always still asks on the server for every always_ask tool, including every shell call."
+
+/**
+ * A decision is sent only for the request id still on the open socket, and only once.
+ * A dropped socket or a stale id must not produce a frame.
+ */
+object ApprovalGate {
+    fun maySend(socketOpen: Boolean, pendingId: String?, tappedId: String, alreadySent: Boolean): Boolean =
+        socketOpen && !alreadySent && !pendingId.isNullOrBlank() && pendingId == tappedId
+}
 
 /**
  * `error` codes the gateway sends for a rejected client frame while the turn keeps running (see ws.rs: steering
@@ -41,30 +73,69 @@ private val nonFatalErrorCodes = setOf("STEERING_QUEUE_FULL", "STEERING_CLOSED",
 fun WsEvent.endsTurn(): Boolean = this is WsEvent.Done || this is WsEvent.Aborted ||
     (this is WsEvent.Error && code !in nonFatalErrorCodes)
 
+/** Status line for a `done` frame. A zero cost with unpriced tokens is not shown as money. */
+fun doneStatus(evt: WsEvent.Done): String = buildString {
+    append("Done")
+    evt.model?.let { append(" · $it") }
+    evt.tokensUsed?.let { append(" · $it tokens") }
+    val unpriced = evt.unpricedTokens ?: 0L
+    if (unpriced > 0) append(" · $unpriced unpriced")
+    val cost = evt.costUsd
+    when {
+        cost != null && cost > 0.0 && unpriced == 0L -> append(" · $").append(formatCost(cost))
+        cost != null && (cost == 0.0 || unpriced > 0) -> append(" · the gateway did not price them")
+    }
+}
+
+private fun WsEvent.Error.isProvider(): Boolean {
+    val code = code.orEmpty()
+    return code.contains("provider", ignoreCase = true) || message.contains("provider", ignoreCase = true)
+}
+
 /** Folds one gateway frame into the UI state. Pure, so it is unit-tested without a socket. */
 fun ChatUiState.reduce(evt: WsEvent): ChatUiState = when (evt) {
     is WsEvent.Chunk -> copy(streaming = streaming + evt.content)
-    is WsEvent.Thinking -> copy(status = "Thinking…")
-    is WsEvent.ToolCall -> copy(status = "Tool: ${evt.name}")
-    is WsEvent.ToolResult -> copy(status = "Tool done: ${evt.name}")
+    is WsEvent.Thinking -> copy(thinking = thinking + evt.content, status = "Thinking…")
+    is WsEvent.ToolCall -> copy(status = "Tool: ${evt.name}", tools = tools + ToolTrace(evt.id, evt.name, evt.args))
+    is WsEvent.ToolResult -> copy(
+        status = "Tool done: ${evt.name}",
+        tools = if (evt.id.isNotBlank() && tools.any { it.id == evt.id }) {
+            tools.map { if (it.id == evt.id) it.copy(result = evt.output) else it }
+        } else tools + ToolTrace(evt.id, evt.name, "", evt.output),
+    )
     is WsEvent.ApprovalRequest -> copy(pendingApproval = evt, status = "Approval needed: ${evt.tool}")
     is WsEvent.Done -> {
         val full = streaming.ifBlank { evt.fullResponse }
+        val keep = full.isNotBlank() || thinking.isNotBlank() || tools.isNotEmpty()
         copy(
-            messages = if (full.isBlank()) messages else messages + ChatMessage("assistant", full),
-            streaming = "", running = false, pendingApproval = null,
-            status = buildString {
-                append("Done")
-                evt.model?.let { append(" · $it") }
-                evt.tokensUsed?.let { append(" · $it tokens") }
-                evt.costUsd?.let { append(" · \$").append(formatCost(it)) }
-            },
+            messages = if (!keep) messages else messages + ChatMessage("assistant", full, thinking, tools, BubbleState.Complete),
+            streaming = "", thinking = "", tools = emptyList(), running = false, pendingApproval = null,
+            status = doneStatus(evt), frame = null,
         )
     }
-    is WsEvent.Aborted -> copy(streaming = "", running = false, pendingApproval = null, status = "Aborted")
-    is WsEvent.Error ->
-        if (evt.endsTurn()) copy(streaming = "", running = false, pendingApproval = null, error = evt.message, status = evt.message)
-        else copy(error = evt.message)
+    is WsEvent.Aborted -> {
+        val keep = streaming.isNotBlank() || thinking.isNotBlank() || tools.isNotEmpty()
+        copy(
+            messages = if (!keep) messages else messages + ChatMessage("assistant", streaming, thinking, tools, BubbleState.Cancelled),
+            streaming = "", thinking = "", tools = emptyList(), running = false, pendingApproval = null,
+            status = "Cancelled",
+        )
+    }
+    is WsEvent.Error -> {
+        if (!evt.endsTurn()) copy(error = evt.message)
+        else {
+            val provider = evt.isProvider()
+            val plain = if (provider) dev.kurobanekotlin.core.connection.GatewayErrors.provider(evt.message) else evt.message
+            val keep = streaming.isNotBlank() || thinking.isNotBlank() || tools.isNotEmpty()
+            copy(
+                messages = if (!keep) messages else messages + ChatMessage(
+                    "assistant", streaming, thinking, tools, BubbleState.Error,
+                ),
+                streaming = "", thinking = "", tools = emptyList(), running = false, pendingApproval = null,
+                error = plain, status = plain, frame = if (provider) ProblemFrame.Provider else frame,
+            )
+        }
+    }
     else -> this
 }
 
@@ -88,11 +159,27 @@ class ChatSession(
 
     private var socket: WebSocketSession? = null
     private var stream: ChatStream? = null
+    private val sentApprovals = mutableSetOf<String>()
+    /** Set when the UI closes the socket on purpose, so the turn is not treated as a failed send. */
+    private var suppressDrop = false
 
     suspend fun loadHistory() {
         val r = api.sessionMessages(sessionId)
-        val obj = r.body.getOrNull() ?: return
-        if (r.httpStatus !in 200..299) return
+        val obj = r.body.getOrNull()
+        if (!r.ok || obj == null) {
+            val detail = obj?.let { (it["error"] as? JsonPrimitive)?.contentOrNull ?: (it["message"] as? JsonPrimitive)?.contentOrNull }
+            val unreachable = r.httpStatus == 0
+            val unauthorized = r.httpStatus == 401
+            _state.value = _state.value.copy(
+                error = GatewayErrors.plain(r.httpStatus, detail),
+                frame = when {
+                    unreachable -> ProblemFrame.Unreachable
+                    unauthorized -> ProblemFrame.Unauthorized
+                    else -> _state.value.frame
+                },
+            )
+            return
+        }
         val msgs = (obj["messages"] as? JsonArray).orEmpty().mapNotNull {
             val o = it as? JsonObject ?: return@mapNotNull null
             val content = o["content"]
@@ -111,10 +198,12 @@ class ChatSession(
     suspend fun send(text: String): Result<Unit> {
         if (text.isBlank()) return Result.failure(IllegalArgumentException("Empty message"))
         if (_state.value.running) return Result.failure(IllegalStateException("A turn is already running"))
+        suppressDrop = false
         val s = ChatStream(http, conn, sessionId)
         _state.value = _state.value.copy(
             messages = _state.value.messages + ChatMessage("user", text),
-            streaming = "", running = true, error = null, pendingApproval = null, status = "Running…",
+            streaming = "", thinking = "", tools = emptyList(),
+            running = true, error = null, frame = null, pendingApproval = null, status = "Running…",
         )
         var ws: WebSocketSession? = null
         return try {
@@ -127,13 +216,21 @@ class ChatSession(
         } catch (e: CancellationException) {
             _state.value = _state.value.copy(running = false, pendingApproval = null)
             throw e
-        } catch (e: NoSuchElementException) {
-            val msg = "The connection closed before the reply finished."
-            _state.value = _state.value.copy(running = false, pendingApproval = null, error = msg, status = msg)
-            Result.failure(e)
         } catch (e: Exception) {
-            val msg = e.message ?: "Could not reach the gateway."
-            _state.value = _state.value.copy(running = false, pendingApproval = null, error = msg, status = msg)
+            if (suppressDrop) {
+                _state.value = _state.value.copy(running = false, pendingApproval = null)
+                return Result.success(Unit)
+            }
+            // A dropped socket ends the turn. The message is not sent again.
+            val dropped = e is NoSuchElementException || e.message.isNullOrBlank()
+            val msg = if (dropped || _state.value.running) {
+                "The gateway could not be reached, so the reply stopped. The message was not sent again."
+            } else {
+                GatewayErrors.unreachable()
+            }
+            _state.value = _state.value.copy(
+                running = false, pendingApproval = null, error = msg, status = msg, frame = ProblemFrame.Unreachable,
+            )
             Result.failure(e)
         } finally {
             withContext(NonCancellable) { runCatching { ws?.close(CloseReason(CloseReason.Codes.NORMAL, "turn over")) } }
@@ -142,13 +239,48 @@ class ChatSession(
         }
     }
 
-    /** Answer the pending approval on the live socket. decision: approve | deny | always */
-    suspend fun answerApproval(decision: String) {
-        val s = stream ?: return
-        val ws = socket ?: return
-        val req = _state.value.pendingApproval ?: return
-        s.sendApproval(ws, req.requestId, decision)
+    /**
+     * Answer the pending approval on the live socket. decision: approve | deny | always.
+     * One tap sends once. A closed socket or a request id that is no longer current sends nothing.
+     */
+    suspend fun answerApproval(decision: String, requestId: String) {
+        val req = _state.value.pendingApproval
+        val ws = socket
+        val open = ws != null && stream != null && ws.isActive
+        if (!ApprovalGate.maySend(open, req?.requestId, requestId, requestId in sentApprovals)) {
+            if (req?.requestId == requestId && !open) {
+                _state.value = _state.value.copy(
+                    pendingApproval = null,
+                    error = "The connection dropped, so no decision was sent.",
+                    status = "The connection dropped, so no decision was sent.",
+                    frame = ProblemFrame.Unreachable,
+                )
+            }
+            return
+        }
+        val live = stream ?: return
+        val socketNow = socket ?: return
+        sentApprovals += requestId
         _state.value = _state.value.copy(pendingApproval = null, status = "Approval sent: $decision")
+        try {
+            live.sendApproval(socketNow, requestId, decision)
+        } catch (_: Exception) {
+            _state.value = _state.value.copy(
+                error = "The connection dropped, so no decision was sent.",
+                status = "The connection dropped, so no decision was sent.",
+                frame = ProblemFrame.Unreachable,
+            )
+        }
+    }
+
+    /** Drops the live socket without sending a decision or another message. */
+    suspend fun close() {
+        suppressDrop = true
+        val ws = socket
+        socket = null
+        stream = null
+        withContext(NonCancellable) { runCatching { ws?.close(CloseReason(CloseReason.Codes.NORMAL, "closed")) } }
+        _state.value = _state.value.copy(running = false, pendingApproval = null)
     }
 
     /** Asks the gateway to abort; the turn ends when its `aborted` frame arrives. */

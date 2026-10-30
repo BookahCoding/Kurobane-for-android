@@ -18,8 +18,18 @@ class MainActivity : ComponentActivity(), KoinComponent {
         setContent {
             val dark = isSystemInDarkTheme()
             Surface(modifier = Modifier.fillMaxSize()) {
-                AppRoot(dark = dark)
+                AppRoot(systemDark = dark)
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        AppVisibility.resumed.value = true
+    }
+
+    override fun onPause() {
+        AppVisibility.resumed.value = false
+        super.onPause()
     }
 }

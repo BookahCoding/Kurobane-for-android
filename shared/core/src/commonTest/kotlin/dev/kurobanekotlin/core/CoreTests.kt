@@ -1,10 +1,19 @@
 package dev.kurobanekotlin.core
 
+import dev.kurobanekotlin.core.chat.ApprovalGate
+import dev.kurobanekotlin.core.chat.BubbleState
 import dev.kurobanekotlin.core.chat.ChatStream
 import dev.kurobanekotlin.core.chat.ChatUiState
+import dev.kurobanekotlin.core.chat.ImageSniff
+import dev.kurobanekotlin.core.chat.MarkdownParser
+import dev.kurobanekotlin.core.chat.MdBlock
 import dev.kurobanekotlin.core.chat.WsEvent
+import dev.kurobanekotlin.core.chat.doneStatus
 import dev.kurobanekotlin.core.chat.endsTurn
 import dev.kurobanekotlin.core.chat.reduce
+import dev.kurobanekotlin.core.catalog.ReadModels
+import dev.kurobanekotlin.core.connection.GatewayErrors
+import dev.kurobanekotlin.core.config.AliasResolution
 import dev.kurobanekotlin.core.config.AgentInfo
 import dev.kurobanekotlin.core.connection.PairResult
 import dev.kurobanekotlin.core.connection.parsePairResponse
@@ -307,8 +316,26 @@ class ChatReducerTests {
     @Test fun errorAndAbortEndTheTurn() {
         val e = ChatUiState(running = true, streaming = "x").reduce(WsEvent.Error("boom", "C"))
         assertFalse(e.running); assertEquals("boom", e.error); assertEquals("", e.streaming)
-        assertFalse(ChatUiState(running = true).reduce(WsEvent.Aborted).running)
+        assertEquals(BubbleState.Error, e.messages.single().bubble)
+        val aborted = ChatUiState(running = true, streaming = "partial").reduce(WsEvent.Aborted)
+        assertFalse(aborted.running)
+        assertEquals("Cancelled", aborted.status)
+        assertEquals(BubbleState.Cancelled, aborted.messages.single().bubble)
+        assertEquals("partial", aborted.messages.single().content)
         assertTrue(WsEvent.Aborted.endsTurn())
+    }
+    @Test fun unpricedDoneDoesNotInventMoney() {
+        val evt = WsEvent.Done("hi", "glm", "p", 0.0, 10, 10)
+        assertEquals("Done · glm · 10 tokens · 10 unpriced · the gateway did not price them", doneStatus(evt))
+        val priced = WsEvent.Done("hi", "glm", "p", 0.0123, 42, 0)
+        assertEquals("Done · glm · 42 tokens · \$0.0123", doneStatus(priced))
+    }
+    @Test fun approvalSendsOnceOnTheOpenSocket() {
+        assertTrue(ApprovalGate.maySend(socketOpen = true, pendingId = "a", tappedId = "a", alreadySent = false))
+        assertFalse(ApprovalGate.maySend(socketOpen = false, pendingId = "a", tappedId = "a", alreadySent = false))
+        assertFalse(ApprovalGate.maySend(socketOpen = true, pendingId = "a", tappedId = "b", alreadySent = false))
+        assertFalse(ApprovalGate.maySend(socketOpen = true, pendingId = "a", tappedId = "a", alreadySent = true))
+        assertFalse(ApprovalGate.maySend(socketOpen = true, pendingId = null, tappedId = "a", alreadySent = false))
     }
     @Test fun rejectedClientFramesDoNotEndTheTurn() {
         val running = ChatUiState(running = true, streaming = "partial")
@@ -326,12 +353,69 @@ class ChatReducerTests {
 }
 
 class AliasResolutionTests {
-    private val agents = listOf(
-        AgentInfo("coder", false, "", emptyList()),
-        AgentInfo("main", true, "", emptyList()),
-    )
-    @Test fun keepsEnabledRequestedAlias() = assertEquals("main", AgentsParser.resolveAlias(agents, "main"))
-    @Test fun fallsBackToFirstEnabledWhenDefaultMissing() = assertEquals("main", AgentsParser.resolveAlias(agents, "default"))
-    @Test fun disabledRequestedFallsBack() = assertEquals("main", AgentsParser.resolveAlias(agents, "coder"))
+    private fun agent(alias: String, enabled: Boolean) = AgentInfo(alias, enabled, "", emptyList())
+
+    @Test fun exactEnabledMatchWinsOverKogarashi() {
+        val agents = listOf(agent("kogarashi", true), agent("main", true))
+        val resolved = AgentsParser.resolve(agents, "main")
+        assertEquals(AliasResolution("main", substitutedKogarashi = false), resolved)
+    }
+    @Test fun missingNameUsesEnabledKogarashi() {
+        val agents = listOf(agent("main", true), agent("kogarashi", true))
+        assertEquals(AliasResolution("kogarashi", substitutedKogarashi = true), AgentsParser.resolve(agents, "default"))
+    }
+    @Test fun disabledNameUsesEnabledKogarashi() {
+        val agents = listOf(agent("coder", false), agent("main", true), agent("kogarashi", true))
+        assertEquals("kogarashi", AgentsParser.resolveAlias(agents, "coder"))
+    }
+    @Test fun doesNotUseAnotherAgentWhenKogarashiIsMissing() {
+        val agents = listOf(agent("coder", false), agent("main", true))
+        assertNull(AgentsParser.resolveAlias(agents, "default"))
+        assertNull(AgentsParser.resolveAlias(agents, "coder"))
+    }
+    @Test fun disabledKogarashiIsNotSubstituted() {
+        val agents = listOf(agent("kogarashi", false), agent("main", true))
+        assertEquals(AliasResolution(null, substitutedKogarashi = false), AgentsParser.resolve(agents, "default"))
+    }
     @Test fun nullWhenNoAgents() = assertNull(AgentsParser.resolveAlias(emptyList(), "default"))
+}
+
+class MarkdownAndImageTests {
+    @Test fun parsesHeadingsListsCodeAndLinks() {
+        val blocks = MarkdownParser.parse(
+            "# Title\n\n- a\n- b\n\n```kt\nval x = 1\n```\n\nSee [docs](https://example.com) and **bold**.",
+        )
+        assertEquals(1, (blocks[0] as MdBlock.Heading).level)
+        assertEquals(listOf("a", "b"), (blocks[1] as MdBlock.Bullet).items)
+        assertEquals("val x = 1", (blocks[2] as MdBlock.Code).text)
+        val spans = MarkdownParser.inlines((blocks[3] as MdBlock.Paragraph).text)
+        assertEquals("https://example.com", spans.first { it.href != null }.href)
+        assertEquals("bold", spans.first { it.bold }.text)
+    }
+    @Test fun sniffAcceptsPngAndRefusesOtherBytes() {
+        val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        assertEquals("image/png", ImageSniff.mime(png))
+        assertNull(ImageSniff.mime(ByteArray(16) { '%'.code.toByte() }))
+        assertNull(ImageSniff.mime(ByteArray(11)))
+    }
+}
+
+class ReadModelTests {
+    private fun body(s: String) = Json.parseToJsonElement(s).jsonObject
+
+    @Test fun unpricedCostIsTokensNotMoney() {
+        val cost = ReadModels.cost(body("""{"cost":{"total_tokens":5,"unpriced_tokens":5,"session_cost_usd":0,"daily_cost_usd":0,"monthly_cost_usd":0}}"""))
+        val line = cost.explain()
+        assertTrue(line.contains("did not price"))
+        assertFalse(line.contains("$"))
+    }
+    @Test fun emptyCronAndPlugins() {
+        assertTrue(ReadModels.cron(body("{}")).isEmpty())
+        assertTrue(ReadModels.plugins(body("{}")).isEmpty())
+    }
+    @Test fun plainGatewayErrors() {
+        assertEquals(GatewayErrors.unauthorized(), GatewayErrors.plain(401))
+        assertEquals(GatewayErrors.unreachable(), GatewayErrors.plain(0))
+        assertTrue(GatewayErrors.provider("timeout").contains("provider"))
+    }
 }

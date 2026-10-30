@@ -6,9 +6,9 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-// A release sets these from its tag (-PappVersion=0.5.0) and repo (-PreleasesRepo=owner/name); see
-// .github/workflows/release.yml. A local build is 0.5.1 and never looks for updates.
-val appVersion = (findProperty("appVersion") as String?)?.removePrefix("v") ?: "0.5.1"
+// A release sets these from its tag (-PappVersion=0.7.0) and repo (-PreleasesRepo=owner/name); see
+// .github/workflows/release.yml. A local build is 0.7.0 and never looks for updates.
+val appVersion = (findProperty("appVersion") as String?)?.removePrefix("v") ?: "0.7.0"
 val releasesRepo = (findProperty("releasesRepo") as String?).orEmpty()
 
 android {
