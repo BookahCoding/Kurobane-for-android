@@ -4,7 +4,6 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
 
 /** One tool spec from GET /api/tools (optionally scoped with `?agent=`). */
 data class GatewayTool(
@@ -18,9 +17,10 @@ object ToolsParser {
         val arr = (obj["tools"] as? JsonArray) ?: return emptyList()
         return arr.mapNotNull { el ->
             val o = el as? JsonObject ?: return@mapNotNull null
+            fun s(k: String) = (o[k] as? JsonPrimitive)?.contentOrNull
             GatewayTool(
-                name = o["name"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null,
-                description = o["description"]?.jsonPrimitive?.contentOrNull ?: "",
+                name = s("name") ?: return@mapNotNull null,
+                description = s("description") ?: "",
             )
         }.sortedBy { it.name.lowercase() }
     }

@@ -49,7 +49,7 @@ private fun epochDays(year: Int, month: Int, day: Int): Long {
     val yoe = y - era * 400
     val doy = (153 * (if (month > 2) month - 3 else month + 9) + 2) / 5 + day - 1
     val doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
-    return era * 146_097 + doe - 719_468
+    return era * 146_097L + doe - 719_468L
 }
 
 /** Lenient RFC3339 → UTC epoch seconds; only the leading `YYYY-MM-DDTHH:MM:SS` part is used. */
