@@ -99,13 +99,13 @@ class SessionsParserTests {
 
 class FormatLastActivityTests {
     @Test fun relativeAges() {
-        val now = 1_800_000_000L // 2027-01-15T06:40:00Z
+        val now = 1_800_000_000L // 2027-01-15T08:00:00Z
         fun t(s: String) = formatLastActivity(s, now)
-        assertEquals("just now", t("2027-01-15T06:39:40.1Z"))
-        assertEquals("5 min ago", t("2027-01-15T06:35:00Z"))
-        assertEquals("3 h ago", t("2027-01-15T03:35:00.123+00:00"))
-        assertEquals("2 d ago", t("2027-01-13T03:35:00Z"))
-        assertEquals("2026-12-01", t("2026-12-01T03:35:00Z"))
+        assertEquals("just now", t("2027-01-15T07:59:40.1Z"))
+        assertEquals("5 min ago", t("2027-01-15T07:55:00Z"))
+        assertEquals("3 h ago", t("2027-01-15T04:55:00.123+00:00"))
+        assertEquals("2 d ago", t("2027-01-13T04:55:00Z"))
+        assertEquals("2026-12-01", t("2026-12-01T04:55:00Z"))
     }
 
     @Test fun lenientWithBadInput() {
@@ -135,7 +135,7 @@ class StatusParserTests {
     @Test fun uptimeFormatting() {
         assertEquals("0s", StatusParser.formatUptime(0))
         assertEquals("1m 0s", StatusParser.formatUptime(60))
-        assertEquals("1h 1m", StatusParser.formatUptime(3780))
+        assertEquals("1h 3m", StatusParser.formatUptime(3780))
         assertEquals("1d 1h", StatusParser.formatUptime(90_000))
     }
 }
