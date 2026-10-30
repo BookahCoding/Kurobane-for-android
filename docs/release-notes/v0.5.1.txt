@@ -1,0 +1,7 @@
+Kurobane for Android 0.5.1
+
+First release built from this repository.
+
+- Pairing, chat and sessions against a ZeroClaw gateway
+- In-app updates from GitHub Releases (Settings -> Check for updates)
+- Plain http:// accepted only for Tailscale, private-network and local addresses
