@@ -1,59 +1,151 @@
 # Kurobane for Android
 
 Kurobane (黒羽, "black wing") is a native Android client for a **ZeroClaw gateway** you already run on a server,
-homelab, VPS or Tailnet. The app talks to your gateway directly — there is no Kurobane server and no account.
-Modeled on the [herald](https://github.com/BookahCoding/herald) Hermes Android client.
+homelab, VPS or Tailnet. The app talks to your gateway directly; there is no Kurobane server and no account.
+Modeled on the [Herald](https://github.com/BookahCoding/herald) Android client.
 
-## Features
+## What works
 
-- **Pairing sign-in**: exchange the pairing code (`zeroclaw gateway pair` / the dashboard) for a bearer token;
-  the token is stored in the **Android Keystore** (EncryptedSharedPreferences), never in plain files
-- **Chat** over the gateway WebSocket (`/ws/chat`, `zeroclaw.v1`): streaming replies, live tool calls/results,
-  approval prompts with Approve/Deny, token/cost summary on `done`, abort a running turn
-- **Sessions**: list (`GET /api/sessions`), open transcripts, new chat, rename, delete
-- **Tailscale-ready**: plain HTTP is allowed only for `*.ts.net` and the `100.64.0.0/10` range
-  (see `res/xml/network_security_config.xml`); everything else requires HTTPS
-- **Themes**: Hokusai-inspired theme families (Washi & Ink, Great Wave, Red Fuji, Kirifuri Falls) with light/dark
-- **In-app updates**: anonymous `releases/latest` check on GitHub; only strict `vX.Y.Z` stable releases with the
-  exact `kurobane-android.apk` asset are offered, and never a downgrade. Install prompts come from Android itself
-  (`REQUEST_INSTALL_PACKAGES`)
+Everything below was exercised on an Android 14 emulator against a small stand-in for the gateway that implements the
+protocol as read from the ZeroClaw source (`crates/zeroclaw-gateway`, October 2026), plus unit tests for the parsing
+and policy code. **It has not yet been run against a real ZeroClaw gateway**; if something differs on yours, please
+open an issue.
 
-## Requirements
+- **Pairing**: enter the gateway address, agent alias and a pairing code; the app calls `POST /api/pair` and stores
+  the bearer token in Keystore-backed `EncryptedSharedPreferences`. Wrong code, rate limit and unreachable-gateway
+  messages are shown. After pairing, the alias is checked against `GET /api/config`: the gateway has no default agent,
+  so if the alias you typed does not exist, the first enabled agent is used.
+- **Chat**: session list (`GET /api/sessions`), open a transcript, start a new chat, send messages over `/ws/chat`
+  with streamed replies, tool-call status, an Approve/Deny prompt for tool approvals, an Abort button, and a
+  token/cost summary. Each turn opens a socket and closes it when the turn ends. Approvals and Abort are covered by
+  unit tests and follow the gateway source, but were not exercised on the emulator.
+- **Settings**: shows the connected gateway, **Forget this gateway** (deletes the stored token), the installed version
+  and **Check for updates**.
+- **In-app updates** (release builds only): see [Updates](#updates).
 
-- Android 8.0+ (API 26+)
-- A running ZeroClaw gateway reachable from the phone
+Not implemented yet: rename/delete sessions, Markdown rendering, a dark/themed UI (the app uses the default Material 3
+light theme; `shared/designsystem` holds an unused theme catalog), tool-argument/result details, notifications.
 
 ## Install
 
-Download `kurobane-android.apk` from the [latest release](https://github.com/BookahCoding/Kurobane-for-android/releases/latest)
-and install it (allow "install from this source" when Android asks). Open the app, enter your gateway address
-(e.g. `http://100.64.0.2:42617` over Tailscale), the agent alias, and a pairing code, then **Pair and connect**.
+1. Download `kurobane-android.apk` from the [latest release](https://github.com/BookahCoding/Kurobane-for-android/releases/latest)
+   and install it (Android asks you to allow installing from your browser or file manager the first time).
+2. Start your gateway and get a pairing code (shown at startup while unpaired, or `zeroclaw gateway get-paircode --new`).
+3. In the app enter the gateway address and the code, then **Pair and connect**.
+
+Requires Android 8.0 or newer (API 26+).
+
+## Connecting to the gateway (Tailscale)
+
+The gateway listens on `127.0.0.1:42617` by default, so the phone cannot reach it until you expose it. Two options:
+
+- **Recommended: `tailscale serve`**: proxy the local port over HTTPS on your tailnet and use
+  `https://<machine>.<tailnet>.ts.net` in the app. Normal TLS, no cleartext.
+- **Direct**: set `[gateway] host` to the machine's Tailscale address (and `allow_public_bind = true`, which ZeroClaw
+  requires for a non-loopback bind) and use `http://100.x.y.z:42617`.
+
+### Cleartext (`http://`) policy and the trade-off
+
+Android's `network_security_config.xml` can only match host *names*. A `<domain>` entry such as `100.64.0.0/10` is
+treated as a literal host name and matches nothing, so the OS cannot restrict cleartext to the Tailscale range. The
+app therefore lets the OS permit cleartext and enforces the rule itself, before any connection, in
+`GatewayUrl.normalize`:
+
+| Address | `http://` | `https://` |
+|---|---|---|
+| `100.64.0.0/10`, `fd7a:115c:a1e0::/48` (Tailscale), `*.ts.net` | allowed | allowed |
+| `10/8`, `172.16/12`, `192.168/16` (private LAN), loopback, `localhost` | allowed | allowed |
+| anything else | **rejected** | required |
+
+A bare `100.64.0.2:42617` defaults to `http://`; any other bare host defaults to `https://`. The pairing code and
+bearer token cross the network unencrypted on the `http://` ranges (Tailscale itself encrypts the tunnel; plain LAN
+does not), so prefer `tailscale serve` or HTTPS where you can. The cost of this design is that the guarantee lives
+in app code and its unit tests (`GatewayUrlTests`) rather than in the OS; all other app traffic (GitHub) uses
+hard-coded `https://` URLs.
+
+## Updates
+
+**Settings → Check for updates** asks GitHub for this repository's `releases/latest`. A release is offered only if
+it is stable (not draft or pre-release), its tag is `vMAJOR.MINOR.PATCH` and newer than the installed version, and it
+has an asset named exactly `kurobane-android.apk` at the expected download address. **Download and install** then:
+
+1. downloads the APK to the app cache and verifies its size and SHA-256 (the digest GitHub reports for the asset),
+2. checks that it is this app, has a higher `versionCode`, and is signed with the **same certificate** as the
+   installed app,
+3. asks Android for the "install unknown apps" permission if needed (a button opens the right setting), and
+4. hands the file to Android's package installer, which shows its own confirmation.
+
+Clear messages are shown for no release found, offline/GitHub errors, rate limiting, a damaged download, a different
+signing key and a missing install permission. The updater is switched off in builds without a release repository
+(local builds, which are signed with the debug key and could not be updated over by a release anyway). If you
+installed a debug build, uninstall it once before installing the release APK; after that, updates install in place.
 
 ## Build from source
 
-You need the Android SDK (compileSdk 37) and JDK 17.
+Requirements: JDK 21 (Android Studio's bundled JBR works), the Android SDK with platform 37 and build-tools, and a
+`local.properties` containing `sdk.dir=...` (Android Studio creates it).
 
 ```bash
-./gradlew :shared:core:allTests     # unit tests
-./gradlew :androidApp:assembleDebug  # debug APK
+./gradlew :shared:core:allTests      # unit tests
+./gradlew :androidApp:lintDebug      # Android lint
+./gradlew :androidApp:assembleDebug  # debug APK in androidApp/build/outputs/apk/debug/
 ```
 
-## Release
+CI (`.github/workflows/ci.yml`) runs the tests, lint, and debug and release builds on every push and pull request.
 
-Push a tag `vX.Y.Z` → `.github/workflows/release.yml` builds a signed APK (secrets `ANDROID_KEYSTORE_B64`,
-`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`) and publishes it as a GitHub Release
-named `kurobane-android.apk`, which is what the in-app updater looks for. Add plain-text notes at
-`docs/release-notes/vX.Y.Z.txt`.
+## Releasing
+
+Versions are `MAJOR.MINOR.PATCH` (minor and patch below 100). The Android `versionCode` is
+`MAJOR*10000 + MINOR*100 + PATCH`, so it always increases with the version, and `versionName` is the version itself.
+Both come from the tag; the version in `androidApp/build.gradle.kts` is only the default for local builds.
+
+**One-time setup: the signing key.** Every release must be signed with the same key or Android will refuse the
+update. Create it once, back it up (losing it means users must uninstall to update), and never commit it:
+
+```bash
+keytool -genkeypair -v -keystore kurobane-release.jks -alias kurobane -keyalg RSA -keysize 4096 -validity 10000
+base64 -w0 kurobane-release.jks > kurobane-release.jks.b64        # PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes("kurobane-release.jks"))
+gh secret set ANDROID_KEYSTORE_B64 < kurobane-release.jks.b64
+gh secret set ANDROID_KEYSTORE_PASSWORD
+gh secret set ANDROID_KEY_ALIAS          # kurobane
+gh secret set ANDROID_KEY_PASSWORD
+```
+
+**Dry run.** In GitHub, *Actions → Release → Run workflow* with a version such as `0.5.1`. It runs the tests, builds
+and signs the APK, verifies the signature, package name and `versionCode`, and attaches the APK as a workflow
+artifact; nothing is published. It prints the signing certificate's SHA-256. Commit that fingerprint (public data)
+to `release-signing-cert.sha256`; from then on the workflow refuses to publish an APK signed with any other key.
+
+**Release.** Merge to `main`, then tag the merged commit:
+
+```bash
+git checkout main && git pull
+git tag v0.5.1 && git push origin v0.5.1
+```
+
+The workflow checks that the tag is on `main` and newer than the latest release, rebuilds and re-verifies, and
+publishes a GitHub Release with `kurobane-android.apk` (the name the updater looks for) and its `.sha256`. Release
+notes come from `docs/release-notes/vX.Y.Z.txt` if present, otherwise they are generated.
 
 ## Protocol notes
 
-- Auth: `POST /api/pair` → `Authorization: Bearer <token>` (WebSocket also accepts the `bearer.<token>` sub-protocol)
-- Chat: `GET /ws/chat?agent_alias=…&session_id=…&name=…`; send `{"type":"message","content":"…"}`;
-  receive `session_start`, `connected`, `chunk`, `thinking`, `tool_call`, `tool_result`, `approval_request`,
-  `done`, `aborted`, `error`; answer approvals with `{"type":"approval_response","request_id":…,"decision":"approve|deny|always"}`
-- REST: `GET /api/status`, `GET /api/sessions`, `GET /api/sessions/{id}/messages`, `DELETE`/`PUT /api/sessions/{id}`,
-  `POST /api/sessions/{id}/abort`, `GET /api/config`, `PUT /api/config/prop?path=…`
+Checked against the ZeroClaw gateway source:
+
+- Pairing: `POST /api/pair` with `{"code","device_name","device_type"}` returns `{"paired":true,"token":…}`;
+  failures are HTTP 400/403/429 with an `error` field. Authenticate afterwards with `Authorization: Bearer <token>`.
+- Chat: `GET /ws/chat?agent_alias=…&session_id=…` (sub-protocol `zeroclaw.v1`; `agent_alias` is required). Send
+  `{"type":"message","content":…}`; receive `session_start`, `chunk`, `thinking`, `tool_call`, `tool_result`,
+  `approval_request`, `done`, `aborted`, `error`. Answer approvals with
+  `{"type":"approval_response","request_id":…,"decision":"approve|deny|always"}`. The gateway keeps the socket open after
+  `done`, so the client closes it.
+- REST used by the app: `GET /api/sessions`, `GET /api/sessions/{id}/messages`, `POST /api/sessions/{id}/abort`,
+  `GET /api/config` (agent list).
 
 ## Privacy
 
-Nothing is sent anywhere except your own gateway and GitHub's release API for the (optional) update check.
+Nothing is sent anywhere except your own gateway and GitHub's release API/downloads for the update check, which you
+start yourself.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
