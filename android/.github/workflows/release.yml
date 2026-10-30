@@ -1,0 +1,90 @@
+# Builds and publishes the Android release on a tag vMAJOR.MINOR.PATCH:
+# kurobane-android.apk (signed with the repo's ANDROID_KEYSTORE_* secrets) attached to a GitHub Release.
+# The in-app updater reads that release. Drafts and pre-releases are never offered.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and publish, for example v0.5.1'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Resolve the release tag
+        id: tag
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="$REF_NAME"; [ "$EVENT_NAME" = "workflow_dispatch" ] && tag="$INPUT_TAG"
+          tag="$(echo -n "$tag" | xargs)"
+          if ! echo "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Refusing to publish '$tag'. The tag must be vMAJOR.MINOR.PATCH." >&2; exit 1
+          fi
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=${tag#v}" >> "$GITHUB_ENV"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          persist-credentials: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Write the keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then echo "Secret ANDROID_KEYSTORE_B64 is missing." >&2; exit 1; fi
+          echo "$KEYSTORE_B64" | base64 -d > keystore.jks
+          cat > keystore.properties <<EOF
+          storeFile=keystore.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+          rm -f keystore.jks.bak
+
+      - name: Build signed release APK
+        run: ./gradlew :androidApp:assembleRelease -PappVersion=$RELEASE_TAG -PreleasesRepo=BookahCoding/Kurobane-for-android --no-daemon
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          apk=$(ls androidApp/build/outputs/apk/release/*.apk | head -1)
+          notes="docs/release-notes/$RELEASE_TAG.txt"
+          if [ -f "$notes" ]; then
+            gh release create "$RELEASE_TAG" --title "Kurobane for Android $RELEASE_VERSION" --latest "$apk" --notes-file "$notes"
+          else
+            gh release create "$RELEASE_TAG" --title "Kurobane for Android $RELEASE_VERSION" --latest "$apk" --notes "Kurobane for Android $RELEASE_VERSION"
+          fi
+
+      - name: Delete the keystore
+        if: always()
+        run: rm -f keystore.jks keystore.properties

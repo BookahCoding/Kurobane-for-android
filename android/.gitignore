@@ -1,0 +1,15 @@
+*.iml
+.gradle/
+build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+keystore.properties
+keystore.jks
+*.apk
+*.apks
+*.aab
+!gradle/wrapper/gradle-wrapper.jar
+!gradlew
+!gradlew.bat
