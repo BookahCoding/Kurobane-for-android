@@ -32,7 +32,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalDrawerValue
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -84,7 +84,7 @@ val KurobanePalette: ThemeColors = ThemeCatalog.all.first().light
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ZeroClawHome(http: HttpClient, conn: GatewayConnection, onForget: () -> Unit) {
-    val drawer = rememberDrawerState(ModalDrawerValue.Closed)
+    val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
     var destination by remember { mutableStateOf(Destination.Chat) }
