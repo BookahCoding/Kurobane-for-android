@@ -14,6 +14,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,16 +35,17 @@ fun ConnectScreen(
     var alias by remember { mutableStateOf("default") }
     var code by remember { mutableStateOf("") }
 
+    Surface(Modifier.fillMaxSize(), color = KurobanePalette.bg) {
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("Kurobane", style = MaterialTheme.typography.headlineMedium)
+        Text("Kurobane", style = MaterialTheme.typography.headlineMedium, color = KurobanePalette.text)
         Text(
             "Connect to your ZeroClaw gateway, for example http://100.64.0.2:42617 over Tailscale, " +
                 "or https://zeroclaw.tail1234.ts.net. Plain http:// is accepted only for Tailscale, private-network " +
                 "and local addresses; anything else needs https://.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall, color = KurobanePalette.textMuted,
         )
         OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(
@@ -58,7 +60,8 @@ fun ConnectScreen(
         Button(onClick = { onSave(name, url, alias, code) }, enabled = url.isNotBlank() && code.isNotBlank() && !busy) {
             Text(if (busy) "Pairing…" else "Pair and connect")
         }
-        if (status.isNotBlank()) Text(status, color = MaterialTheme.colorScheme.primary)
+        if (status.isNotBlank()) Text(status, color = KurobanePalette.accent)
         Spacer(Modifier.height(8.dp))
+    }
     }
 }

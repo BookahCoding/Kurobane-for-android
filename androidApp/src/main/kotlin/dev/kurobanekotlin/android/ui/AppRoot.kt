@@ -25,9 +25,7 @@ import org.koin.compose.koinInject
 @Serializable
 data class SavedServer(val name: String, val baseUrl: String, val agentAlias: String)
 
-private enum class Screen { Chats, Settings }
-
-/** Root of the app: connect screen until a server is paired, then the session list, chat and settings. */
+/** Root of the app: connect screen until a gateway is paired, then the drawer-based home. */
 @Composable
 fun AppRoot(dark: Boolean) {
     val http: HttpClient = koinInject()
@@ -39,7 +37,6 @@ fun AppRoot(dark: Boolean) {
     var conn by remember { mutableStateOf<GatewayConnection?>(null) }
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
-    var screen by remember { mutableStateOf(Screen.Chats) }
 
     LaunchedEffect(Unit) {
         val saved = store.get(SettingsKeys.Servers)
@@ -78,7 +75,6 @@ fun AppRoot(dark: Boolean) {
                                     tokens.set(normalized, r.token)
                                     store.set(SettingsKeys.Servers, Json.encodeToString(SavedServer(full.name, normalized, resolved)))
                                     conn = full
-                                    screen = Screen.Chats
                                     status = ""
                                 }
                             }
@@ -88,20 +84,14 @@ fun AppRoot(dark: Boolean) {
                     }
                 },
             )
-            screen == Screen.Settings -> SettingsScreen(
-                conn = c,
-                onBack = { screen = Screen.Chats },
-                onForget = {
-                    scope.launch {
-                        tokens.remove(c.baseUrl)
-                        store.remove(SettingsKeys.Servers)
-                        conn = null
-                        status = ""
-                        screen = Screen.Chats
-                    }
-                },
-            )
-            else -> ChatListScreen(http, c, onOpenSettings = { screen = Screen.Settings })
+            else -> ZeroClawHome(http, c, onForget = {
+                scope.launch {
+                    tokens.remove(c.baseUrl)
+                    store.remove(SettingsKeys.Servers)
+                    conn = null
+                    status = ""
+                }
+            })
         }
     }
 }

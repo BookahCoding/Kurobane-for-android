@@ -15,15 +15,24 @@ open an issue.
   the bearer token in Keystore-backed `EncryptedSharedPreferences`. Wrong code, rate limit and unreachable-gateway
   messages are shown. After pairing, the alias is checked against `GET /api/config`: the gateway has no default agent,
   so if the alias you typed does not exist, the first enabled agent is used.
-- **Chat**: session list (`GET /api/sessions`), open a transcript, start a new chat, send messages over `/ws/chat`
-  with streamed replies, tool-call status, an Approve/Deny prompt for tool approvals, an Abort button, and a
+- **Chat**: session list (`GET /api/sessions`) with friendly names and relative timestamps, rename and delete
+  (`PUT` / `DELETE /api/sessions/{id}`), open a transcript, start a new chat, send messages over `/ws/chat`
+  with streamed replies, tool-call status, an Approve/Always/Deny prompt for tool approvals, an Abort button, and a
   token/cost summary. Each turn opens a socket and closes it when the turn ends. The approval round-trip and a 45-second turn were run on the emulator; Abort is covered by
   unit tests and the gateway source but was not exercised live.
+- **Dashboard**: gateway health from `GET /api/status` (version, uptime, pairing state, memory backend, resolved
+  model/provider, channels).
+- **Agents**: the configured agent list from `GET /api/config` (alias, enabled, provider, channels).
+- **Tools**: the tool registry from `GET /api/tools?agent=…` (name + description), scoped to the connected agent.
 - **Settings**: shows the connected gateway, **Forget this gateway** (deletes the stored token), the installed version
   and **Check for updates**.
+
+The signed-in home follows Herald's shape: the open chat fills the screen and a sessions sidebar — a drawer on
+phones — carries the chat list plus Dashboard, Agents, Tools and Settings. Surfaces are colored from the Hokusai
+theme catalog in `shared/designsystem` (Washi & Ink by default), the same families as the Windows client.
 - **In-app updates** (release builds only): see [Updates](#updates).
 
-Not implemented yet: rename/delete sessions, Markdown rendering, a dark/themed UI (the app uses the default Material 3
+Not implemented yet: Markdown rendering, a dark/themed UI (the app uses the default Material 3
 light theme; `shared/designsystem` holds an unused theme catalog), tool-argument/result details, notifications.
 
 ## Install
@@ -142,7 +151,10 @@ Checked against the ZeroClaw gateway source:
   `{"type":"approval_response","request_id":…,"decision":"approve|deny|always"}`. The gateway keeps the socket open after
   `done`, so the client closes it.
 - REST used by the app: `GET /api/sessions`, `GET /api/sessions/{id}/messages`, `POST /api/sessions/{id}/abort`,
-  `GET /api/config` (agent list).
+  `PUT /api/sessions/{id}` (rename), `DELETE /api/sessions/{id}` (delete), `GET /api/config` (agent list),
+  `GET /api/status` (dashboard), `GET /api/tools?agent=…` (tool registry).
+- Session ids: `GET /api/sessions` returns both a display `session_id` (`gw_` stripped) and the full `session_key`;
+  rename/delete use `session_key`, the WebSocket uses the display id.
 
 ## Privacy
 

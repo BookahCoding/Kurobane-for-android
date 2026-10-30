@@ -92,6 +92,8 @@ class ZeroClawApi(private val http: HttpClient, private val conn: GatewayConnect
         put("/api/sessions/${id.encodeURLPathPart()}", buildJsonObject { put("name", name) })
     suspend fun abortSession(id: String): ApiResultLike = post("/api/sessions/${id.encodeURLPathPart()}/abort", JsonObject(emptyMap()))
     suspend fun config(): ApiResultLike = get("/api/config")
+    suspend fun tools(agentAlias: String? = null): ApiResultLike =
+        get("/api/tools" + (agentAlias?.takeIf { it.isNotBlank() }?.let { "?agent=${it.encodeURLParameter()}" } ?: ""))
 }
 
 /** Maps the /api/pair answer to a [PairResult]; the gateway uses 400/403/429 with an `error` field for failures. */

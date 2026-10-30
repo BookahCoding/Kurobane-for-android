@@ -51,25 +51,25 @@ private sealed interface UpdateUi {
 }
 
 @Composable
-fun SettingsScreen(conn: GatewayConnection, onBack: () -> Unit, onForget: () -> Unit) {
+fun SettingsScreen(conn: GatewayConnection, onForget: () -> Unit, modifier: Modifier = Modifier) {
     var confirmForget by remember { mutableStateOf(false) }
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        modifier.verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        OutlinedButton(onClick = onBack) { Text("← Back") }
-        Text("Settings", style = MaterialTheme.typography.headlineSmall)
-
-        Card(Modifier.fillMaxWidth()) {
+        Card(
+            Modifier.fillMaxWidth(),
+            colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = KurobanePalette.surface),
+        ) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Gateway", style = MaterialTheme.typography.titleMedium)
-                Text("${conn.name}\n${conn.baseUrl}\nAgent: ${conn.agentAlias}", style = MaterialTheme.typography.bodyMedium)
+                Text("Gateway", style = MaterialTheme.typography.titleMedium, color = KurobanePalette.text)
+                Text("${conn.name}\n${conn.baseUrl}\nAgent: ${conn.agentAlias}", style = MaterialTheme.typography.bodyMedium, color = KurobanePalette.text)
                 if (!confirmForget) {
                     OutlinedButton(onClick = { confirmForget = true }) { Text("Forget this gateway") }
                 } else {
                     Text(
                         "This deletes the stored token from this phone. You will need a new pairing code to connect again.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall, color = KurobanePalette.danger,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = onForget) { Text("Forget and unpair") }
@@ -82,7 +82,7 @@ fun SettingsScreen(conn: GatewayConnection, onBack: () -> Unit, onForget: () -> 
         UpdateCard()
 
         Text("Kurobane for Android ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+            color = KurobanePalette.textMuted)
     }
 }
 
@@ -129,7 +129,7 @@ private fun UpdateCard() {
         }
     }
 
-    Card(Modifier.fillMaxWidth()) {
+    Card(Modifier.fillMaxWidth(), colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = KurobanePalette.surface)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Updates", style = MaterialTheme.typography.titleMedium)
             Text("Installed: ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyMedium)
@@ -137,7 +137,7 @@ private fun UpdateCard() {
             if (repo.isEmpty() || current == null) {
                 Text(
                     "Update checks are disabled in this build. Install a signed release from GitHub to get in-app updates.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall, color = KurobanePalette.textMuted,
                 )
                 return@Column
             }
@@ -161,7 +161,7 @@ private fun UpdateCard() {
                         OutlinedButton(onClick = ::check) { Text("Check again") }
                     }
                     Text("Android will ask you to confirm the installation.", style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        color = KurobanePalette.textMuted)
                 }
                 is UpdateUi.Downloading -> {
                     if (s.total > 0) LinearProgressIndicator(progress = { (s.done.toFloat() / s.total).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
@@ -185,7 +185,7 @@ private fun UpdateCard() {
                     OutlinedButton(onClick = { openInstaller(s.release, s.apk) }) { Text("Install") }
                 }
                 is UpdateUi.Failed -> {
-                    Text(s.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                    Text(s.message, color = KurobanePalette.danger, style = MaterialTheme.typography.bodyMedium)
                     OutlinedButton(onClick = ::check) { Text("Try again") }
                 }
             }
