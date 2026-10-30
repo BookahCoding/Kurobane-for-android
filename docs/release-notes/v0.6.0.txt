@@ -1,0 +1,8 @@
+Tailored to ZeroClaw, restyled after Herald.
+
+- New Dashboard (GET /api/status), Agents (GET /api/config) and Tools (GET /api/tools?agent=…) pages, plus rename and delete for sessions (PUT/DELETE /api/sessions/{id}) with dialogs in the sidebar.
+- Herald-style home: the open chat fills the screen and a sessions sidebar — a drawer on phones — carries the chat list and the destinations.
+- Every surface now uses the Hokusai theme catalog from shared/designsystem (Washi & Ink by default), the same families as the Windows client.
+- Session rows show names and relative timestamps ("5 min ago") instead of raw ids and RFC3339 strings; chat replies are bubbles (user right, agent left).
+- Approval prompts gained an "Always" answer, matching the gateway's approve/deny/always decisions.
+- Protocol layer verified against the zeroclaw-labs/zeroclaw gateway source; new parsers are unit-tested.
