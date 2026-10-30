@@ -16,7 +16,10 @@ import kotlinx.serialization.json.jsonObject
 import dev.kurobanekotlin.core.config.AgentsParser
 import dev.kurobanekotlin.core.config.isMaskedSecret
 import dev.kurobanekotlin.core.gateway.GatewayUrl
+import dev.kurobanekotlin.core.gateway.StatusParser
 import dev.kurobanekotlin.core.sessions.SessionsParser
+import dev.kurobanekotlin.core.sessions.formatLastActivity
+import dev.kurobanekotlin.core.tools.ToolsParser
 import dev.kurobanekotlin.core.update.ReleaseVersion
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -91,6 +94,65 @@ class SessionsParserTests {
 
     @Test fun emptyWhenNoSessionsKey() {
         assertEquals(emptyList(), SessionsParser.parse(json.parseToJsonElement("{}").jsonObject))
+    }
+}
+
+class FormatLastActivityTests {
+    @Test fun relativeAges() {
+        val now = 1_800_000_000L // 2027-01-15T06:40:00Z
+        fun t(s: String) = formatLastActivity(s, now)
+        assertEquals("just now", t("2027-01-15T06:39:40.1Z"))
+        assertEquals("5 min ago", t("2027-01-15T06:35:00Z"))
+        assertEquals("3 h ago", t("2027-01-15T03:35:00.123+00:00"))
+        assertEquals("2 d ago", t("2027-01-13T03:35:00Z"))
+        assertEquals("2026-12-01", t("2026-12-01T03:35:00Z"))
+    }
+
+    @Test fun lenientWithBadInput() {
+        assertEquals("", formatLastActivity("", 0))
+        assertEquals("not-a-date", formatLastActivity("not-a-date", 0))
+    }
+}
+
+class StatusParserTests {
+    @Test fun parsesStatusFields() {
+        val obj = Json.parseToJsonElement("""{
+            "version":"0.115.0","model_provider":"anthropic.main","model":"claude-sonnet-4",
+            "temperature":0.3,"uptime_seconds":3720,"gateway_port":42617,"locale":"en",
+            "memory_backend":"sqlite","paired":true,"agent_alias":"kogarashi",
+            "channels":{"telegram.bot":true,"discord.main":true},"health":{},"process":{}
+        }""").jsonObject
+        val s = StatusParser.parse(obj)
+        assertEquals("0.115.0", s.version)
+        assertEquals("anthropic.main", s.modelProvider)
+        assertEquals("claude-sonnet-4", s.model)
+        assertEquals(0.3, s.temperature)
+        assertEquals(3720, s.uptimeSeconds)
+        assertTrue(s.paired)
+        assertEquals(listOf("discord.main", "telegram.bot"), s.channels.sorted())
+    }
+
+    @Test fun uptimeFormatting() {
+        assertEquals("0s", StatusParser.formatUptime(0))
+        assertEquals("1m 0s", StatusParser.formatUptime(60))
+        assertEquals("1h 1m", StatusParser.formatUptime(3780))
+        assertEquals("1d 1h", StatusParser.formatUptime(90_000))
+    }
+}
+
+class ToolsParserTests {
+    @Test fun parsesToolsSortedByName() {
+        val obj = Json.parseToJsonElement("""{"tools":[
+            {"name":"shell","description":"Run a shell command","parameters":{}},
+            {"name":"memory_search","description":"Search memory","parameters":{},"output":{}}
+        ]}""").jsonObject
+        val tools = ToolsParser.parse(obj)
+        assertEquals(listOf("memory_search", "shell"), tools.map { it.name })
+        assertEquals("Run a shell command", tools[1].description)
+    }
+
+    @Test fun emptyWhenNoToolsKey() {
+        assertEquals(emptyList(), ToolsParser.parse(Json.parseToJsonElement("{}").jsonObject))
     }
 }
 
