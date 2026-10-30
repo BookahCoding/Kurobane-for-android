@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
@@ -18,11 +20,17 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -63,6 +71,9 @@ import dev.kurobanekotlin.core.chat.ALWAYS_ASK_NOTE
 import dev.kurobanekotlin.core.chat.BubbleState
 import dev.kurobanekotlin.core.chat.ChatMessage
 import dev.kurobanekotlin.core.chat.ChatSession
+import dev.kurobanekotlin.core.chat.Slash
+import dev.kurobanekotlin.core.chat.SlashCommand
+import dev.kurobanekotlin.core.chat.SlashRoute
 import dev.kurobanekotlin.core.chat.ImageSniff
 import dev.kurobanekotlin.core.chat.MarkdownParser
 import dev.kurobanekotlin.core.chat.MdBlock
@@ -71,6 +82,7 @@ import dev.kurobanekotlin.core.chat.ProblemFrame
 import dev.kurobanekotlin.core.chat.ToolTrace
 import dev.kurobanekotlin.core.connection.GatewayConnection
 import dev.kurobanekotlin.core.connection.ZeroClawApi
+import dev.kurobanekotlin.core.gateway.StatusParser
 import dev.kurobanekotlin.core.sessions.GatewaySession
 import dev.kurobanekotlin.core.storage.KeyValueStore
 import kotlinx.coroutines.CoroutineScope
@@ -91,7 +103,13 @@ fun ChatScreen(
     chat: ChatSession,
     store: KeyValueStore,
     work: CoroutineScope,
-    onBack: () -> Unit,
+    advanced: Boolean,
+    onOpenDrawer: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onNewChat: () -> Unit,
+    onOpenPage: (String) -> Unit,
+    onRenameChat: (String) -> Unit,
+    onAdvanced: (Boolean) -> Unit,
 ) {
     val state by chat.state.collectAsState()
     val listState = rememberLazyListState()
@@ -102,6 +120,25 @@ fun ChatScreen(
     var pending by remember(key) { mutableStateOf<Pair<ByteArray, String>?>(null) }
     var attachError by remember(key) { mutableStateOf<String?>(null) }
     var sending by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var showModels by remember { mutableStateOf(false) }
+    var showHelp by remember { mutableStateOf(false) }
+    var commandNote by remember { mutableStateOf<String?>(null) }
+    var unknownText by remember { mutableStateOf<String?>(null) }
+    var modelSeed by remember { mutableStateOf("") }
+    var modelLabel by remember(conn.agentAlias) { mutableStateOf("Model") }
+    var modelProvider by remember(conn.agentAlias) { mutableStateOf<String?>(null) }
+
+    fun reloadModel() {
+        work.launch {
+            val agent = api.status(conn.agentAlias)
+            val parsed = agent.body.getOrNull()?.let { StatusParser.parse(it) }
+            if (agent.ok && parsed != null && parsed.model.isNotBlank()) {
+                modelLabel = parsed.model
+                modelProvider = parsed.modelProvider
+            }
+        }
+    }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -127,6 +164,81 @@ fun ChatScreen(
         draft = store.get(key).orEmpty()
         draftReady = true
     }
+    LaunchedEffect(conn.agentAlias) { reloadModel() }
+
+    fun clearDraft() {
+        draft = ""
+        work.launch { store.set(key, "") }
+    }
+
+    fun runRoute(route: SlashRoute) {
+        when (route) {
+            SlashRoute.Help -> showHelp = true
+            SlashRoute.NewChat -> onNewChat()
+            SlashRoute.Abort -> work.launch { chat.abort() }
+            SlashRoute.OpenModels -> showModels = true
+            is SlashRoute.SetModel -> {
+                modelSeed = route.model
+                commandNote = "Review ${route.model} before it is written."
+                showModels = true
+            }
+            SlashRoute.OpenSettings -> onOpenSettings()
+            SlashRoute.OpenMenu -> onOpenDrawer()
+            SlashRoute.Status -> work.launch {
+                val agent = api.status(conn.agentAlias)
+                val parsed = agent.body.getOrNull()?.let { StatusParser.parse(it) }
+                commandNote = if (!agent.ok || parsed == null) {
+                    apiMessage(agent.httpStatus, agent.body.getOrNull())
+                } else {
+                    reloadModel()
+                    val provider = parsed.modelProvider?.let { " · $it" }.orEmpty()
+                    "Agent ${conn.agentAlias}: ${parsed.model.ifBlank { "no model" }}$provider"
+                }
+            }
+            is SlashRoute.Rename -> onRenameChat(route.name)
+            is SlashRoute.OpenPage -> onOpenPage(route.page)
+            is SlashRoute.SetAdvanced -> onAdvanced(route.advanced)
+            is SlashRoute.NeedsArgument -> commandNote = route.hint
+            SlashRoute.Unknown -> unknownText = draft.trim()
+        }
+    }
+
+    fun submitComposer() {
+        val command = if (pending == null) SlashCommand.parse(draft) else null
+        if (command != null) {
+            val route = Slash.route(command)
+            if (route is SlashRoute.Unknown) {
+                unknownText = draft.trim()
+            } else {
+                clearDraft()
+                runRoute(route)
+            }
+            return
+        }
+        val text = draft
+        val image = pending
+        work.launch {
+            sending = true
+            try {
+                var outgoing = text.trim()
+                if (image != null) {
+                    val uploaded = api.uploadImage(conn.agentAlias, image.first, image.second)
+                    val marker = uploaded.getOrNull()?.marker
+                    if (marker == null) {
+                        attachError = uploaded.exceptionOrNull()?.message ?: "The image was not uploaded."
+                        return@launch
+                    }
+                    outgoing = if (outgoing.isBlank()) marker else "$outgoing\n$marker"
+                    pending = null
+                }
+                if (outgoing.isBlank()) return@launch
+                clearDraft()
+                chat.send(outgoing)
+            } finally {
+                sending = false
+            }
+        }
+    }
     LaunchedEffect(draft, draftReady) {
         if (draftReady) store.set(key, draft)
     }
@@ -136,28 +248,96 @@ fun ChatScreen(
         if (total > 0) listState.animateScrollToItem(total - 1)
     }
 
+    if (showModels) {
+        ModelPickerDialog(api, conn, work, initialTyped = modelSeed, onDismiss = { showModels = false; modelSeed = "" }, onSaved = { saved ->
+            modelLabel = saved
+            commandNote = "Wrote the model for ${conn.agentAlias}. Reloading what the gateway reports."
+            reloadModel()
+        })
+    }
+    if (showHelp) {
+        AlertDialog(
+            onDismissRequest = { showHelp = false },
+            title = { Text("Commands") },
+            text = {
+                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                    Text(Slash.helpText() + "\n\nAn unknown / line is not sent until you choose Send as a message.")
+                }
+            },
+            confirmButton = { TextButton(onClick = { showHelp = false }) { Text("Close") } },
+        )
+    }
+    unknownText?.let { text ->
+        AlertDialog(
+            onDismissRequest = { unknownText = null },
+            title = { Text("Not a command") },
+            text = { Text("“$text” is not a Kurobane command. Send it to the agent as a message?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    unknownText = null
+                    clearDraft()
+                    work.launch { chat.send(text) }
+                }) { Text("Send as a message") }
+            },
+            dismissButton = { TextButton(onClick = { unknownText = null }) { Text("Keep editing") } },
+        )
+    }
+
+    val slashRows = if (pending == null) Slash.suggestions(draft) else emptyList()
+    val slashReady = pending == null && SlashCommand.parse(draft) != null
+
     Scaffold(
         containerColor = KurobanePalette.bg,
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        session.displayName,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis,
-                        color = KurobanePalette.text,
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = KurobanePalette.text,
+                    Column {
+                        Text(
+                            session.displayName,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            color = KurobanePalette.text,
+                        )
+                        Text(
+                            modelLabel + (modelProvider?.let { " · $it" } ?: ""),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = KurobanePalette.textMuted,
                         )
                     }
                 },
+                navigationIcon = {
+                    IconButton(onClick = onOpenDrawer) {
+                        Icon(Icons.Filled.Menu, contentDescription = "Open sidebar", tint = KurobanePalette.text)
+                    }
+                },
                 actions = {
-                    if (state.running) TextButton(onClick = { work.launch { chat.abort() } }) { Text("Abort") }
+                    IconButton(onClick = { showModels = true }) {
+                        Icon(Icons.Filled.Tune, contentDescription = "Change model", tint = KurobanePalette.text)
+                    }
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = KurobanePalette.text)
+                    }
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Filled.MoreVert, contentDescription = "Chat menu", tint = KurobanePalette.text)
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(text = { Text("New chat") }, onClick = { menuOpen = false; onNewChat() })
+                        DropdownMenuItem(text = { Text("Commands") }, onClick = { menuOpen = false; showHelp = true })
+                        DropdownMenuItem(text = { Text("Rename") }, onClick = {
+                            menuOpen = false
+                            commandNote = "Type /rename and the new name."
+                            draft = "/rename "
+                        })
+                        if (state.running) {
+                            DropdownMenuItem(text = { Text("Stop reply") }, onClick = { menuOpen = false; work.launch { chat.abort() } })
+                        }
+                        DropdownMenuItem(text = { Text("Gateway status") }, onClick = { menuOpen = false; runRoute(SlashRoute.Status) })
+                        DropdownMenuItem(text = { Text(if (advanced) "Simple mode" else "Advanced mode") }, onClick = {
+                            menuOpen = false
+                            onAdvanced(!advanced)
+                        })
+                        DropdownMenuItem(text = { Text("Settings") }, onClick = { menuOpen = false; onOpenSettings() })
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = KurobanePalette.bg),
             )
@@ -211,49 +391,51 @@ fun ChatScreen(
             pending?.let { (bytes, _) ->
                 AttachedPreview(bytes) { pending = null }
             }
+            commandNote?.let {
+                Text(it, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = KurobanePalette.textMuted)
+            }
+            if (slashRows.isNotEmpty()) {
+                SlashSuggestionList(slashRows) { row ->
+                    val command = SlashCommand.parse(row.text)
+                    if (command != null && Slash.route(command) is SlashRoute.NeedsArgument) {
+                        draft = row.text + " "
+                    } else if (command != null && command.name == "model") {
+                        clearDraft()
+                        showModels = true
+                    } else {
+                        draft = row.text
+                        clearDraft()
+                        command?.let { runRoute(Slash.route(it)) }
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = {
+                    if (!draft.trimStart().startsWith("/")) draft = "/"
+                }) { Text("Commands  /") }
+                TextButton(onClick = { showModels = true }, modifier = Modifier.weight(1f)) {
+                    Text("Model · $modelLabel", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
             Row(
                 Modifier.fillMaxWidth().padding(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {
-                IconButton(onClick = { picker.launch("image/*") }, enabled = !state.running && !sending) {
+                IconButton(onClick = { picker.launch("image/*") }, enabled = !sending) {
                     Icon(Icons.Filled.Image, contentDescription = "Attach image", tint = KurobanePalette.text)
                 }
                 OutlinedTextField(
                     draft, { draft = it },
                     modifier = Modifier.weight(1f),
-                    label = { Text("Message") },
+                    label = { Text(if (slashReady) "Command" else "Message") },
+                    placeholder = { Text("Message, or / for commands") },
                     maxLines = 8,
                 )
                 Button(
-                    onClick = {
-                        val text = draft
-                        val image = pending
-                        work.launch {
-                            sending = true
-                            try {
-                                var outgoing = text.trim()
-                                if (image != null) {
-                                    val uploaded = api.uploadImage(conn.agentAlias, image.first, image.second)
-                                    val marker = uploaded.getOrNull()?.marker
-                                    if (marker == null) {
-                                        attachError = uploaded.exceptionOrNull()?.message ?: "The image was not uploaded."
-                                        return@launch
-                                    }
-                                    outgoing = if (outgoing.isBlank()) marker else "$outgoing\n$marker"
-                                    pending = null
-                                }
-                                if (outgoing.isBlank()) return@launch
-                                draft = ""
-                                store.set(key, "")
-                                chat.send(outgoing)
-                            } finally {
-                                sending = false
-                            }
-                        }
-                    },
-                    enabled = (draft.isNotBlank() || pending != null) && !state.running && !sending,
-                ) { Text("Send") }
+                    onClick = { submitComposer() },
+                    enabled = (draft.isNotBlank() || pending != null) && (!state.running || slashReady) && !sending,
+                ) { Text(if (slashReady) "Run" else "Send") }
             }
         }
     }

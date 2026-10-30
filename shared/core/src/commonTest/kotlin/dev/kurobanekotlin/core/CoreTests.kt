@@ -6,6 +6,9 @@ import dev.kurobanekotlin.core.chat.ChatStream
 import dev.kurobanekotlin.core.chat.ChatUiState
 import dev.kurobanekotlin.core.chat.ImageSniff
 import dev.kurobanekotlin.core.chat.MarkdownParser
+import dev.kurobanekotlin.core.chat.Slash
+import dev.kurobanekotlin.core.chat.SlashCommand
+import dev.kurobanekotlin.core.chat.SlashRoute
 import dev.kurobanekotlin.core.chat.MdBlock
 import dev.kurobanekotlin.core.chat.WsEvent
 import dev.kurobanekotlin.core.chat.doneStatus
@@ -23,6 +26,8 @@ import dev.kurobanekotlin.core.update.UpdateCheckFailed
 import dev.kurobanekotlin.core.update.UpdateUpToDate
 import kotlinx.serialization.json.jsonObject
 import dev.kurobanekotlin.core.config.AgentsParser
+import dev.kurobanekotlin.core.config.ModelChoice
+import dev.kurobanekotlin.core.config.ModelChoices
 import dev.kurobanekotlin.core.config.isMaskedSecret
 import dev.kurobanekotlin.core.gateway.GatewayUrl
 import dev.kurobanekotlin.core.gateway.StatusParser
@@ -417,5 +422,88 @@ class ReadModelTests {
         assertEquals(GatewayErrors.unauthorized(), GatewayErrors.plain(401))
         assertEquals(GatewayErrors.unreachable(), GatewayErrors.plain(0))
         assertTrue(GatewayErrors.provider("timeout").contains("provider"))
+    }
+}
+
+class SlashTests {
+    @Test fun proseIsNotACommand() {
+        assertNull(SlashCommand.parse("see /help"))
+        assertNull(SlashCommand.parse("/usr/local"))
+        assertNull(SlashCommand.parse("hello"))
+    }
+
+    @Test fun parsesNameAndArgument() {
+        val command = SlashCommand.parse("  /Model mistral-large-latest  ")
+        assertEquals("model", command?.name)
+        assertEquals("mistral-large-latest", command?.arg)
+    }
+
+    @Test fun routesLocalCommands() {
+        assertEquals(SlashRoute.Help, Slash.route(SlashCommand.parse("/help")!!))
+        assertEquals(SlashRoute.Abort, Slash.route(SlashCommand.parse("/abort")!!))
+        assertEquals(SlashRoute.NewChat, Slash.route(SlashCommand.parse("/new")!!))
+        assertEquals(SlashRoute.OpenModels, Slash.route(SlashCommand.parse("/model")!!))
+        assertEquals(SlashRoute.SetModel("glm"), Slash.route(SlashCommand.parse("/model glm")!!))
+        assertTrue(Slash.route(SlashCommand.parse("/rename")!!) is SlashRoute.NeedsArgument)
+        assertEquals(SlashRoute.Rename("Morning"), Slash.route(SlashCommand.parse("/rename Morning")!!))
+        assertEquals(SlashRoute.OpenPage("jobs"), Slash.route(SlashCommand.parse("/cron")!!))
+        assertEquals(SlashRoute.Unknown, Slash.route(SlashCommand.parse("/nope")!!))
+    }
+
+    @Test fun suggestionsFollowTheTypedPrefix() {
+        val names = Slash.suggestions("/mo").map { it.text }
+        assertEquals(listOf("/model"), names)
+        assertTrue(Slash.suggestions("/").any { it.text == "/settings" })
+        assertTrue(Slash.suggestions("hello").isEmpty())
+    }
+}
+
+class ModelChoiceTests {
+    private fun body(s: String) = Json.parseToJsonElement(s).jsonObject
+
+    @Test fun listsAgentFallbackAndOtherSlots() {
+        val choices = ModelChoices.fromConfig(body("""
+            {"agents":{"kogarashi":{"model_provider":"mistral.kogarashi","model":"zai-glm","fallback_models":["mistral-large-latest"]}},
+             "providers":{"models":{"mistral":{"kogarashi":{"model":"zai-glm","fallback_models":["mistral-large-latest"]}},
+             "openai":{"other":{"model":"gpt"}}}}}
+        """.trimIndent()), "kogarashi")
+        assertEquals(listOf("zai-glm", "mistral-large-latest", "gpt"), choices.map { it.model }.distinct())
+    }
+
+    @Test fun sameProviderWritesAgentAndSlot() {
+        val config = body("""{"providers":{"models":{"mistral":{"kogarashi":{"model":"old"}}}}}""")
+        val choice = ModelChoices.fromConfig(
+            body("""{"agents":{"kogarashi":{"model":"new","model_provider":"mistral.kogarashi"}},"providers":{"models":{"mistral":{"kogarashi":{"model":"old"}}}}}"""),
+            "kogarashi",
+        ).first { it.model == "new" }
+        val plan = ModelChoices.plan(config, "kogarashi", "mistral.kogarashi", choice)
+        assertFalse(plan.changesProvider)
+        assertEquals(
+            listOf("agents.kogarashi.model", "providers.models.mistral.kogarashi.model"),
+            plan.writes.map { it.path },
+        )
+        assertTrue(plan.writes.all { it.value == "new" })
+    }
+
+    @Test fun otherProviderIsASeparateWrite() {
+        val config = body("{}")
+        val choice = ModelChoice("gpt", "openai.other", "openai.other")
+        val plan = ModelChoices.plan(config, "kogarashi", "mistral.kogarashi", choice)
+        assertTrue(plan.changesProvider)
+        assertEquals("agents.kogarashi.model_provider", plan.writes[0].path)
+        assertEquals("openai.other", plan.writes[0].value)
+        assertEquals("agents.kogarashi.model", plan.writes[1].path)
+        assertEquals(2, plan.writes.size)
+    }
+
+    @Test fun refusesAMaskedModel() {
+        val plan = ModelChoices.plan(
+            body("{}"),
+            "kogarashi",
+            "mistral.kogarashi",
+            ModelChoice("sk-****", null, "typed"),
+        )
+        assertEquals(emptyList<String>(), plan.writes.map { it.path })
+        assertTrue(plan.refusal?.contains("masked") == true)
     }
 }

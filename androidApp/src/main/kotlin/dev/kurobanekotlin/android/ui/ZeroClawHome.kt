@@ -24,13 +24,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Devices
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Extension
-import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Schedule
@@ -40,6 +38,8 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Toll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -130,6 +130,7 @@ fun ZeroClawHome(
     val context = LocalContext.current
     val api = remember(conn) { ZeroClawApi(http, conn) }
     var destination by remember { mutableStateOf(Destination.Chat) }
+    var gateNote by remember { mutableStateOf<String?>(null) }
     var openSession by remember { mutableStateOf<GatewaySession?>(null) }
     var live by remember { mutableStateOf<Pair<GatewaySession, ChatSession>?>(null) }
     val idle = remember { MutableStateFlow(ChatUiState()) }
@@ -213,6 +214,15 @@ fun ZeroClawHome(
     ) {
         Surface(Modifier.fillMaxSize(), color = KurobanePalette.bg) {
             Column(Modifier.fillMaxSize()) {
+                gateNote?.let { note ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(note, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = KurobanePalette.text)
+                        TextButton(onClick = { gateNote = null }) { Text("Dismiss") }
+                    }
+                }
                 aliasNote?.let { note ->
                     Row(
                         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -227,26 +237,61 @@ fun ZeroClawHome(
                         Destination.Chat -> {
                             val s = openSession
                             val chat = live?.second
-                            if (s == null || chat == null) EmptyChatHome()
-                            else ChatScreen(api, conn, s, chat, store, scope, onBack = { openSession = null })
+                            if (s == null || chat == null) {
+                                EmptyChatHome(onOpenDrawer = ::openDrawer, onOpenSettings = { destination = Destination.Settings }, onNewChat = {
+                                    select(GatewaySession("kb-" + UUID.randomUUID().toString().take(12), "", "", "", 0, conn.agentAlias, null))
+                                })
+                            } else ChatScreen(
+                                api, conn, s, chat, store, scope,
+                                advanced = advanced,
+                                onOpenDrawer = ::openDrawer,
+                                onOpenSettings = { destination = Destination.Settings },
+                                onNewChat = {
+                                    select(GatewaySession("kb-" + UUID.randomUUID().toString().take(12), "", "", "", 0, conn.agentAlias, null))
+                                },
+                                onOpenPage = { page ->
+                                    val dest = destinationFor(page)
+                                    if (dest == null) {
+                                        gateNote = "No page named $page."
+                                    } else if (dest.advanced && !advanced) {
+                                        gateNote = "${dest.title} is an advanced page. Turn advanced on from the chat menu or Settings, then try again."
+                                    } else {
+                                        destination = dest
+                                    }
+                                },
+                                onRenameChat = { name ->
+                                    scope.launch {
+                                        val id = s.sessionKey.ifBlank { s.sessionId }
+                                        val result = api.renameSession(id, name)
+                                        if (result.ok) {
+                                            val renamed = s.copy(name = name)
+                                            openSession = renamed
+                                            live = renamed to chat
+                                        } else {
+                                            gateNote = apiMessage(result.httpStatus, result.body.getOrNull())
+                                        }
+                                    }
+                                },
+                                onAdvanced = onAdvanced,
+                            )
                         }
-                        Destination.NeedsYou -> PageScaffold(Destination.NeedsYou.title, ::openDrawer) {
+                        Destination.NeedsYou -> PageScaffold(Destination.NeedsYou.title, ::openDrawer, { destination = Destination.Settings }) {
                             NeedsYouPage(pending?.tool, pending?.summary, pending?.requestId) { decision, id ->
                                 scope.launch { live?.second?.answerApproval(decision, id) }
                             }
                         }
-                        Destination.Dashboard -> PageScaffold(Destination.Dashboard.title, ::openDrawer) { DashboardBody(http, conn) }
-                        Destination.Agents -> PageScaffold(Destination.Agents.title, ::openDrawer) { AgentsBody(http, conn) }
-                        Destination.Tools -> PageScaffold(Destination.Tools.title, ::openDrawer) { ToolsBody(http, conn) }
-                        Destination.Skills -> PageScaffold(Destination.Skills.title, ::openDrawer) { SkillsBody(http, conn) }
-                        Destination.Jobs -> PageScaffold(Destination.Jobs.title, ::openDrawer) { JobsBody(http, conn) }
-                        Destination.Memory -> PageScaffold(Destination.Memory.title, ::openDrawer) { MemoryBody(http, conn) }
-                        Destination.Usage -> PageScaffold(Destination.Usage.title, ::openDrawer) { UsageBody(http, conn) }
-                        Destination.Plugins -> PageScaffold(Destination.Plugins.title, ::openDrawer) { PluginsBody(http, conn) }
-                        Destination.Personality -> PageScaffold(Destination.Personality.title, ::openDrawer) { PersonalityBody(http, conn) }
-                        Destination.Config -> PageScaffold(Destination.Config.title, ::openDrawer) { ConfigBody(http, conn) }
-                        Destination.Devices -> PageScaffold(Destination.Devices.title, ::openDrawer) { DevicesBody(http, conn) }
-                        Destination.Settings -> PageScaffold(Destination.Settings.title, ::openDrawer) {
+                        Destination.Dashboard -> PageScaffold(Destination.Dashboard.title, ::openDrawer, { destination = Destination.Settings }) { DashboardBody(http, conn) }
+                        Destination.Agents -> PageScaffold(Destination.Agents.title, ::openDrawer, { destination = Destination.Settings }) { AgentsBody(http, conn) }
+                        Destination.Tools -> PageScaffold(Destination.Tools.title, ::openDrawer, { destination = Destination.Settings }) { ToolsBody(http, conn) }
+                        Destination.Skills -> PageScaffold(Destination.Skills.title, ::openDrawer, { destination = Destination.Settings }) { SkillsBody(http, conn) }
+                        Destination.Jobs -> PageScaffold(Destination.Jobs.title, ::openDrawer, { destination = Destination.Settings }) { JobsBody(http, conn) }
+                        Destination.Memory -> PageScaffold(Destination.Memory.title, ::openDrawer, { destination = Destination.Settings }) { MemoryBody(http, conn) }
+                        Destination.Usage -> PageScaffold(Destination.Usage.title, ::openDrawer, { destination = Destination.Settings }) { UsageBody(http, conn) }
+                        Destination.Plugins -> PageScaffold(Destination.Plugins.title, ::openDrawer, { destination = Destination.Settings }) { PluginsBody(http, conn) }
+                        Destination.Personality -> PageScaffold(Destination.Personality.title, ::openDrawer, { destination = Destination.Settings }) { PersonalityBody(http, conn) }
+                        Destination.Config -> PageScaffold(Destination.Config.title, ::openDrawer, { destination = Destination.Settings }) { ConfigBody(http, conn) }
+                        Destination.Devices -> PageScaffold(Destination.Devices.title, ::openDrawer, { destination = Destination.Settings }) { DevicesBody(http, conn) }
+                        Destination.Settings -> PageScaffold(Destination.Settings.title, ::openDrawer, { destination = Destination.Settings }) {
                             SettingsScreen(
                                 conn, onForget, appearance, themeId, advanced,
                                 onAppearance, onTheme, onAdvanced,
@@ -270,22 +315,42 @@ private fun NeedsYouPage(tool: String?, summary: String?, requestId: String?, on
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EmptyChatHome() {
-    Column(
-        Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text("No chat open", style = MaterialTheme.typography.titleMedium, color = KurobanePalette.text)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Open the sidebar to pick a chat\nor start a new one.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = KurobanePalette.textMuted,
-            textAlign = TextAlign.Center,
-        )
+private fun EmptyChatHome(onOpenDrawer: () -> Unit, onOpenSettings: () -> Unit, onNewChat: () -> Unit) {
+    PageScaffold("Chat", onOpenDrawer, onOpenSettings) {
+        Column(
+            Modifier.fillMaxSize().padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("No chat open", style = MaterialTheme.typography.titleMedium, color = KurobanePalette.text)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Start a chat, or open the sidebar to pick one. In a chat, type / for commands.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = KurobanePalette.textMuted,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(16.dp))
+            TextButton(onClick = onNewChat) { Text("New chat") }
+        }
     }
+}
+
+private fun destinationFor(page: String): Destination? = when (page) {
+    "jobs" -> Destination.Jobs
+    "agents" -> Destination.Agents
+    "tools" -> Destination.Tools
+    "skills" -> Destination.Skills
+    "memory" -> Destination.Memory
+    "usage" -> Destination.Usage
+    "plugins" -> Destination.Plugins
+    "personality" -> Destination.Personality
+    "config" -> Destination.Config
+    "devices" -> Destination.Devices
+    "dashboard" -> Destination.Dashboard
+    else -> null
 }
 
 @Composable
@@ -332,6 +397,7 @@ private fun SessionsSidebar(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         SidebarHeader(conn)
         Spacer(Modifier.height(12.dp))
+        SidebarAction(Icons.Filled.Settings, "Settings", KurobanePalette.accent) { onPickDestination(Destination.Settings) }
         SidebarAction(Icons.Filled.Add, "New chat", KurobanePalette.accent, onNewChat)
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
@@ -497,14 +563,14 @@ private fun SessionRow(
                 color = KurobanePalette.textMuted,
             )
         }
-        IconButton(onClick = onLabel, modifier = Modifier.size(28.dp)) {
-            Icon(Icons.Filled.Label, contentDescription = "Label on this phone", tint = KurobanePalette.textMuted, modifier = Modifier.size(14.dp))
+        var menu by remember(s.sessionId) { mutableStateOf(false) }
+        IconButton(onClick = { menu = true }, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Filled.MoreVert, contentDescription = "Chat actions", tint = KurobanePalette.textMuted)
         }
-        IconButton(onClick = onRename, modifier = Modifier.size(28.dp)) {
-            Icon(Icons.Filled.Edit, contentDescription = "Rename", tint = KurobanePalette.textMuted, modifier = Modifier.size(14.dp))
-        }
-        IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
-            Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = KurobanePalette.textMuted, modifier = Modifier.size(14.dp))
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; onRename() })
+            DropdownMenuItem(text = { Text("Label on this phone") }, onClick = { menu = false; onLabel() })
+            DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDelete() })
         }
     }
 }

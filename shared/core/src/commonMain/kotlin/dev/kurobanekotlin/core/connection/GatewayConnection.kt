@@ -88,7 +88,9 @@ class ZeroClawApi(private val http: HttpClient, private val conn: GatewayConnect
         return parsePairResponse(resp.status.value, body)
     }
 
-    suspend fun status(): ApiResultLike = get("/api/status")
+    /** GET /api/status. Pass [agent] so model and provider are that agent's, not the process default. */
+    suspend fun status(agent: String? = null): ApiResultLike =
+        get("/api/status" + agent?.takeIf { it.isNotBlank() }?.let { "?agent=${it.encodeURLParameter()}" }.orEmpty())
     suspend fun sessions(): ApiResultLike = get("/api/sessions")
     suspend fun sessionMessages(id: String): ApiResultLike = get("/api/sessions/${id.encodeURLPathPart()}/messages")
     suspend fun deleteSession(id: String): ApiResultLike = delete("/api/sessions/${id.encodeURLPathPart()}")
