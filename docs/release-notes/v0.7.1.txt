@@ -1,0 +1,8 @@
+Kurobane for Android 0.7.1 — chat commands, model picker, and easier settings.
+
+- Type / in a chat, or tap Commands, for /new, /stop, /rename, /model, /settings, /menu, /status, /jobs, and /advanced. A known command runs in the app. An unknown / line is not sent until you choose Send as a message.
+- The chat bar shows this agent's model. Choosing one asks before anything is written. The write is agents.<alias>.model. When the current provider slot already stores a model, that field is set to the same id. Choosing another provider also writes agents.<alias>.model_provider, and the dialog says so. A masked value is refused. The gateway process model is shown and is not changed.
+- Settings is on the chat bar, on other pages, and at the top of the sidebar. The open chat and each chat row have an actions menu.
+- Settings → Check for updates still installs only kurobane-android.apk from a stable release of this repository. A debug-signed APK cannot update a release-signed install.
+
+The model write was not sent to a live gateway from the machine that prepared this release, and the screens were not opened on a phone.

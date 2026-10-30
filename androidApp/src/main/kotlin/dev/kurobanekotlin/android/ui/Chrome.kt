@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -38,7 +39,12 @@ internal fun apiMessage(status: Int, body: JsonObject?): String {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun PageScaffold(title: String, onOpenDrawer: () -> Unit, content: @Composable () -> Unit) {
+internal fun PageScaffold(
+    title: String,
+    onOpenDrawer: () -> Unit,
+    onOpenSettings: () -> Unit,
+    content: @Composable () -> Unit,
+) {
     Scaffold(
         containerColor = KurobanePalette.bg,
         topBar = {
@@ -47,6 +53,11 @@ internal fun PageScaffold(title: String, onOpenDrawer: () -> Unit, content: @Com
                 navigationIcon = {
                     IconButton(onClick = onOpenDrawer) {
                         Icon(Icons.Filled.Menu, contentDescription = "Open sidebar", tint = KurobanePalette.text)
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = KurobanePalette.text)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = KurobanePalette.bg),
